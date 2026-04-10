@@ -23,6 +23,17 @@
 
 ## Node
 
+### Consistent Hashing
+
+- We have for now say 4 servers at ports 4001, 4002, 4003 and 4004.
+- To represent hash ring, we need to have some name or id for each node.
+- Each peer or conn is represented by the id, so we can hash that, the key for the obj.
+- Now how do each server represent the list of nodes, we can have virtual nodes.
+- for each hash(id) -> Peer.
+- but for each node x, when we add node y, y will contact x. so handshake done. x knows y.
+- for now say no vn, so for write how can x find the next 3 peers, we need a sorted map[hash(key)] -> Peer
+- if we modify the reigistry which makes sense for now, how are we supposed to have virtual nodes. maybe a param V denoting the virtual node, while adding to registry we add two nodes, 
+
 ### Put
 
 1. It receives a PutObjectMessage, we will not add to registry the peer since the first msg is not handshake from the server (load balancer).
@@ -40,8 +51,6 @@
 4. It returns the value to the client if found, or an error if the key does not exist.
 
 ## Server
-
-- `server` managers the load balancing job, recieves incoming http get and put requests, and forwards them to the appropriate nodes based on the consistent hashing ring.
 
 ### Think
 - At the end server knows which node to call. now once it calls that node via http or via tcp?
