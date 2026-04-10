@@ -56,7 +56,7 @@ func main() {
 
 func makeNode(addr string, bootstrap []string, log *slog.Logger) *node.Node {
 	t := tcp.New(nil) // nil = plain TCP; pass tls.Config for TLS
-	
+
 	n := node.New(node.Config{
 		ListenAddr:     addr,
 		BootstrapAddrs: bootstrap,

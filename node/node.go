@@ -135,7 +135,9 @@ func (n *Node) Send(peerID string, msg *message.Message) error {
 	return target.Send(msg)
 }
 
-func (n *Node) PeerCount() int { return n.registry.Len() }
+func (n *Node) PeerCount() int {
+	return n.registry.Len()
+}
 
 // --- internal ---
 
@@ -151,7 +153,7 @@ func (n *Node) acceptLoop() {
 				continue
 			}
 		}
-		
+
 		n.wg.Add(1)
 		go func() {
 			defer n.wg.Done()
