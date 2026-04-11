@@ -1,54 +1,121 @@
-// It started as a simple map, but now converted to treemap using internal implementation.
-// It provides sorted (key, value) pairs from (hash(id)) -> Peer.
+// Package registry provides a thread-safe consistent hashing registry
+// backed by a treemap (ordered map). It maps virtual node hashes to peers.
+//
+// Design:
+//   - ring  : hash(vnode) -> peer (for routing)
+//   - nodes : peerID -> peer (for identity tracking)
+//
+// Semantics:
+//
+//   - Add(id, p) is idempotent and acts as an upsert:
+//
+//   - If id exists → old peer is replaced
+//
+//   - If not → new peer is added
+//
+//   - RemoveIfMatch(id, p) removes a peer ONLY if the provided connection
+//     matches the currently registered one. This prevents stale disconnects
+//     from removing newer connections.
+//
+// Concurrency:
+//   - All operations are thread-safe via RWMutex.
+//   - Read-heavy operations use RLock.
+//
+// Responsibility boundary:
+//   - Registry does NOT:
+//   - validate connections
+//   - detect duplicates
+//   - manage lifecycle timing
+//   - Caller is responsible for:
+//   - when to Add (e.g., after handshake)
+//   - when to Remove (e.g., on disconnect)
+//   - ensuring correct peer identity
 package registry
 
 import (
+	"strconv"
 	"sync"
 
 	"github.com/kasodeep/dynamo-go/peer"
 	"github.com/kasodeep/dynamo-go/treemap"
 )
 
-// TODO: To make it to consistent hashing we need to convert to hash() -> use crypto.
+// V is the number of virtual nodes per physical peer.
+var V = 2
 
-// Registry maintains a thread-safe mapping of peer IDs to active peer connections.
+// Registry maintains a consistent hashing ring and peer identity map.
 type Registry struct {
 	mu    sync.RWMutex
-	peers *treemap.Tree[string, peer.Peer]
+	ring  *treemap.Tree[string, peer.Peer]
+	nodes map[string]peer.Peer
 }
 
-// New initializes and returns an empty peer registry.
+// New initializes an empty registry.
 func New() *Registry {
-	return &Registry{peers: treemap.New[string, peer.Peer]()}
+	return &Registry{
+		ring:  treemap.New[string, peer.Peer](),
+		nodes: make(map[string]peer.Peer),
+	}
 }
 
-// Has checks whether a peer with the given ID exists in the registry.
-func (r *Registry) Has(id string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	_, ok := r.peers.Get(id)
-	return ok
-}
-
-// Add inserts or updates a peer in the registry by its ID.
+// Add inserts or replaces a peer by ID.
+//
+// Behavior:
+//   - If id does not exist → inserts new peer
+//   - If id exists → replaces old peer (removes old vnode mappings)
+//
+// This ensures:
+//   - At most one active connection per peer ID
+//   - Safe handling of reconnects
 func (r *Registry) Add(id string, p peer.Peer) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.peers.Insert(id, p)
+
+	r.nodes[id] = p
+	r.addToRing(id, p)
 }
 
-// Remove deletes a peer from the registry by its ID.
-func (r *Registry) Remove(id string) {
+// RemoveIfMatch removes a peer ONLY if the provided peer matches
+// the currently registered connection.
+//
+// This prevents stale connections from deleting newer ones.
+func (r *Registry) RemoveIfMatch(id string, p peer.Peer) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.peers.Delete(id)
+
+	current, exists := r.nodes[id]
+	if !exists || current != p {
+		return // stale or already replaced
+	}
+
+	delete(r.nodes, id)
+	r.removeFromRing(id)
 }
 
-// Each iterates over a snapshot of peers and applies the given function.
+// Has checks whether a peer ID is currently registered.
+func (r *Registry) Has(id string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.nodes[id]
+	return ok
+}
+
+// Len returns the number of unique peers (not virtual nodes).
+func (r *Registry) Len() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.nodes)
+}
+
+// Each iterates over all unique peers.
+//
+// Guarantees:
+//   - Each peer is visited exactly once
+//   - Safe snapshot semantics (no lock during callback)
 func (r *Registry) Each(fn func(peer.Peer)) {
 	r.mu.RLock()
-	snapshot := make([]peer.Peer, 0, r.peers.Len())
-	for _, p := range r.peers.Values() {
+	snapshot := make([]peer.Peer, 0, len(r.nodes))
+	for _, p := range r.nodes {
 		snapshot = append(snapshot, p)
 	}
 	r.mu.RUnlock()
@@ -58,9 +125,24 @@ func (r *Registry) Each(fn func(peer.Peer)) {
 	}
 }
 
-// Len returns the current number of registered peers.
-func (r *Registry) Len() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.peers.Len()
+// addToRing inserts V virtual nodes for the given peer.
+func (r *Registry) addToRing(id string, p peer.Peer) {
+	base := id + "_"
+
+	for i := 1; i <= V; i++ {
+		key := base + strconv.Itoa(i)
+		hash := hash([]byte(key))
+		r.ring.Insert(hash, p)
+	}
+}
+
+// removeFromRing removes all virtual nodes for the given peer ID.
+func (r *Registry) removeFromRing(id string) {
+	base := id + "_"
+
+	for i := 1; i <= V; i++ {
+		key := base + strconv.Itoa(i)
+		hash := hash([]byte(key))
+		r.ring.Delete(hash)
+	}
 }

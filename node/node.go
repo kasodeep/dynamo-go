@@ -208,7 +208,7 @@ func (n *Node) dialWithRetry(addr string) {
 func (n *Node) serveConn(p peer.Peer) {
 	defer func() {
 		if id := p.ID(); id != "" {
-			n.registry.Remove(id)
+			n.registry.RemoveIfMatch(id, p)
 			n.log.Info("peer disconnected", "id", id)
 		}
 		p.Close()
@@ -232,7 +232,7 @@ func (n *Node) serveConn(p peer.Peer) {
 }
 
 func (n *Node) evict(p peer.Peer) {
-	n.registry.Remove(p.ID())
+	n.registry.RemoveIfMatch(p.ID(), p)
 	p.Close()
 }
 
