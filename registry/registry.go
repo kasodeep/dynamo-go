@@ -95,11 +95,11 @@ func (r *Registry) RemoveIfMatch(id string, p peer.Peer) {
 }
 
 // Has checks whether a peer ID is currently registered.
-func (r *Registry) Has(id string) bool {
+func (r *Registry) Get(id string) (peer.Peer, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	_, ok := r.nodes[id]
-	return ok
+	p, ok := r.nodes[id]
+	return p, ok
 }
 
 // Len returns the number of unique peers (not virtual nodes).

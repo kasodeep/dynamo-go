@@ -70,3 +70,6 @@
 | Peer       | “I have a TCP connection to this node”         |
 | Registry   | “I can route requests to these nodes”          |
 | Membership | “I believe these nodes are alive/suspect/dead” |
+
+Fix logs
+timings

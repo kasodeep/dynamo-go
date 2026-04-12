@@ -240,6 +240,8 @@ func (n *Node) pingLoop() {
 			return
 		case <-tick.C:
 			peers := n.registry.RandomSubset(k)
+			n.log.Debug("pinging peers", "count", len(peers))
+
 			for _, p := range peers {
 				_ = p.Send(&message.Message{Type: message.Ping})
 			}
@@ -256,13 +258,18 @@ func (n *Node) failureDetector() {
 			now := time.Now()
 
 			for _, m := range n.table.Snapshot() {
+				if m.ID == n.cfg.ListenAddr {
+					continue
+				}
 				delta := now.Sub(m.LastSeen)
 
 				if delta > n.cfg.SuspectInterval && m.State == member.Alive {
+					n.log.Warn("peer marked suspect", "id", m.ID)
 					n.table.UpdateState(m.ID, member.Suspect)
 				}
 
 				if delta > n.cfg.DeadInterval && m.State == member.Suspect {
+					n.log.Info("peer marked dead", "id", m.ID)
 					n.table.UpdateState(m.ID, member.Dead)
 				}
 			}

@@ -24,6 +24,11 @@ func (n *Node) onHandshake(p peer.Peer, msg *message.Message) error {
 		return fmt.Errorf("node: empty handshake ID or bad ID from %s", p.RemoteAddr())
 	}
 
+	check, ok := n.registry.Get(id)
+	if ok && check == p {
+		return nil
+	}
+
 	p.SetID(id)
 
 	// overwrite is fine (RemoveIfMatch protects correctness)
@@ -56,14 +61,19 @@ func (n *Node) onPong(p peer.Peer, _ *message.Message) error {
 
 	// This is a liveness confirmation, not a state transition
 	n.table.MarkAlive(id)
+	n.log.Debug("pong received", "id", id)
 
 	return nil
 }
 
 func (n *Node) onGossip(p peer.Peer, m *message.Message) error {
 	incoming := codec.DecodeMembers(m.Payload)
+	n.log.Debug("gossip received", "from", p.ID(), "members", len(incoming))
 
 	for _, member := range incoming {
+		if member.ID == n.cfg.ListenAddr {
+			continue
+		}
 		n.table.Upsert(&member)
 	}
 
