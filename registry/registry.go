@@ -33,8 +33,10 @@
 package registry
 
 import (
+	"math/rand"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/kasodeep/dynamo-go/peer"
 	"github.com/kasodeep/dynamo-go/treemap"
@@ -145,4 +147,41 @@ func (r *Registry) removeFromRing(id string) {
 		hash := hash([]byte(key))
 		r.ring.Delete(hash)
 	}
+}
+
+// RandomSubset returns up to k distinct peers chosen uniformly at random.
+//
+// Properties:
+//   - No duplicates
+//   - Returns min(k, N)
+//   - Snapshot semantics (no lock during use)
+//   - Safe under concurrent mutations
+func (r *Registry) RandomSubset(k int) []peer.Peer {
+	r.mu.RLock()
+
+	// snapshot
+	n := len(r.nodes)
+	if n == 0 || k <= 0 {
+		r.mu.RUnlock()
+		return nil
+	}
+
+	peers := make([]peer.Peer, 0, n)
+	for _, p := range r.nodes {
+		peers = append(peers, p)
+	}
+
+	r.mu.RUnlock()
+
+	// shuffle (Fisher–Yates)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for i := len(peers) - 1; i > 0; i-- {
+		j := rng.Intn(i + 1)
+		peers[i], peers[j] = peers[j], peers[i]
+	}
+
+	if k >= len(peers) {
+		return peers
+	}
+	return peers[:k]
 }

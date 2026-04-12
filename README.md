@@ -15,6 +15,12 @@
 ### Registry
 
 - `registry` abstracts the map of peers and provides thread-safe access to the peer connections.
+- It allows for adding, removing, and retrieving peers in a concurrent environment.
+- It uses consistent hashing using `treemap` to create and update the hash ring, plus maintains id to peer mapping for efficient lookups.
+
+### Consistent Hashing
+
+- `treemap` provides custom implementation of red black tree, which is balanced bst, with O(log n) for insert, delete, and search.
 
 ### Router
 
@@ -23,44 +29,44 @@
 
 ## Node
 
-### Consistent Hashing
+`node` is the main struct representing a node in the cluster. It contains:
+- Configuration (`Config`)
+- Logger (`slog.Logger`)
+- Transport layer (`transport.Transport`)
+- Registry of peers (`registry.Registry`)
+- Membership table (`membership.Table`)
+- Router for message handling (`router.Router`)
+- Context and wait group for managing goroutines.
 
-- We have for now say 4 servers at ports 4001, 4002, 4003 and 4004.
-- To represent hash ring, we need to have some name or id for each node.
-- Each peer or conn is represented by the id, so we can hash that, the key for the obj.
-- Now how do each server represent the list of nodes, we can have virtual nodes.
-- for each hash(id) -> Peer.
-- but for each node x, when we add node y, y will contact x. so handshake done. x knows y.
-- for now say no vn, so for write how can x find the next 3 peers, we need a sorted map[hash(key)] -> Peer
-- if we modify the reigistry which makes sense for now, how are we supposed to have virtual nodes. maybe a param V denoting the virtual node, while adding to registry we add two nodes, 
+### Start
 
-### Put
+- Starts the listener and go routine to handle incoming connections. In turn spawns a servConn to read messages from the connection and route them to the appropriate handler.
+- Dials to bootstrap nodes to join the cluster and sends handshake messages. In turns spawns servConn.
 
-1. It receives a PutObjectMessage, we will not add to registry the peer since the first msg is not handshake from the server (load balancer).
-2. It performs a write-ahead log (WAL) to ensure durability of the data.
-3. It updates the in-memory data structure with the new value.
-4. It replicates the data to other nodes in the cluster for fault tolerance. W < N.
-5. It sends an acknowledgment back to the client once the write operation is successful.
-6. We need Flush(), periodically or on pressure, to ensure the data is written to disk.
+### Convergence
 
-### Get
+- Each node sends a handshake message to existing one, which in turn receives it back. (Registry updated)
+- Not doing `indirect ping` in gossip, which allows us to check other nodes.
 
-1. It receives a GetObjectMessage, we will not add to registry the peer since the first msg is not handshake from the server (load balancer).
-2. It checks the in-memory data structure for the requested key.
-3. It calls other N high rank nodes, and then returns (if multiple) values, it returns the most recent one based on the timestamp.
-4. It returns the value to the client if found, or an error if the key does not exist.
+#### Loops
 
-## Server
+- Starts a ping loop, failure loop and gossip loop.
 
-### Think
-- At the end server knows which node to call. now once it calls that node via http or via tcp?
-- well, we do listen and so use tcp, we get the new message types GetObjectMessage and PutObjectMessage.
-- responsibility wise, server manages consistent hashing for load balancing.
-- the node, on write performs wal, in memory update, and replication. on read, it performs in memory read, and if not found, it performs disk read.
-- then we have failure detection, handling that via two concepts. but that is last first the top stuff.
+### Config
+
+`Config` struct defines the configuration for a node, including:
+- Listen address, Bootstrap nodes, intervals for now.
 
 ## Trade Offs
 
 - By keeping the HTTP server “dumb” (random/round-robin), it doesn’t need cluster topology, so failures of primary nodes don’t break routing—any node can take over as coordinator.
 - With sloppy quorum and hinted handoff, writes still succeed by going to healthy replicas and syncing later.
 - The tradeoff is a bit of extra latency and internal hops, but you gain a more resilient and loosely coupled system, which fits well unless you’re building something ultra latency-sensitive like trading systems.
+
+### Definitions
+
+| Concept    | Meaning                                        |
+| ---------- | ---------------------------------------------- |
+| Peer       | “I have a TCP connection to this node”         |
+| Registry   | “I can route requests to these nodes”          |
+| Membership | “I believe these nodes are alive/suspect/dead” |
