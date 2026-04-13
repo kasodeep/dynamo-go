@@ -2,10 +2,12 @@ package node
 
 import "time"
 
-var suspect = time.Second * 3
-var dead = time.Second * 6
-var fail = time.Second * 5
-var gossip = time.Second * 5
+var suspect = time.Second * 4
+var dead = time.Second * 8
+
+var ping = time.Second * 3
+var fail = time.Second * 10
+var gossip = time.Second * 10
 
 // It provides configuration to the nodes, with the listen addr, bootstrap nodes.
 // PingInterval denotes a way to perodically check the peer conn.
@@ -15,10 +17,11 @@ type Config struct {
 	BootstrapAddrs []string
 
 	PingInterval      time.Duration
-	SuspectInterval   time.Duration
-	DeadInterval      time.Duration
-	FailCheckInterval time.Duration
 	GossipInterval    time.Duration
+	FailCheckInterval time.Duration
+
+	SuspectInterval time.Duration
+	DeadInterval    time.Duration
 }
 
 // Returns a new config with the provided params,
@@ -37,11 +40,11 @@ func NewConfig(ListenAddr string, BootstrapAddrs []string, PingInterval time.Dur
 // Provides default config with ping interval as 1s.
 func (c *Config) defaults() {
 	if c.PingInterval == 0 {
-		c.PingInterval = 1 * time.Second
+		c.PingInterval = ping
 	}
-
-	c.SuspectInterval = suspect * c.PingInterval
-	c.DeadInterval = dead * c.PingInterval
-	c.FailCheckInterval = fail
 	c.GossipInterval = gossip
+	c.FailCheckInterval = fail
+
+	c.DeadInterval = dead
+	c.SuspectInterval = suspect
 }

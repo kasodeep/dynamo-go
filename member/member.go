@@ -12,6 +12,7 @@ const (
 
 // Stores the info about the member of the cluster.
 // Version and LastSeen allows us to mark the updates during gossip protocol consistently.
+// Separate from Registry and Peer, since it represents membership not connection.
 type Member struct {
 	ID       string
 	State    State

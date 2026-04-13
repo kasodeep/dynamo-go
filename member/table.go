@@ -5,17 +5,22 @@ import (
 	"time"
 )
 
+// Maps the id of remote peer to it's member state.
+// Upsert, MarkAlive and UpdateState are used separately for each purpose.
+// For adding we need to use the Set method.
 type Table struct {
 	mu      sync.RWMutex
 	members map[string]*Member
 }
 
+// Returns a new empty table with an empty map.
 func New() *Table {
 	return &Table{
 		members: make(map[string]*Member),
 	}
 }
 
+// Returns the member and true if it is present, else returns false.
 func (t *Table) Get(id string) (Member, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -28,6 +33,7 @@ func (t *Table) Get(id string) (Member, bool) {
 	return *m, true
 }
 
+// Set the member associated with the given id in it's data.
 func (t *Table) Set(m *Member) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -35,6 +41,8 @@ func (t *Table) Set(m *Member) {
 	t.members[m.ID] = m
 }
 
+// Used for gossip protocol, where incoming request provides different state.
+// Checks for exists, the versions, and handles worstState in same version.
 func (t *Table) Upsert(incoming *Member) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -57,6 +65,8 @@ func (t *Table) Upsert(incoming *Member) {
 	}
 }
 
+// Only updates the state of the member.
+// Updates lastseen only when found to be of state alive.
 func (t *Table) UpdateState(id string, state State) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -68,9 +78,14 @@ func (t *Table) UpdateState(id string, state State) {
 
 	m.Version++
 	m.State = state
-	m.LastSeen = time.Now()
+
+	if state == Alive {
+		m.LastSeen = time.Now()
+	}
 }
 
+// Updates the version and the status along with last seen.
+// Useful for pong reaction, and reconnect handshakes after failure.
 func (t *Table) MarkAlive(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -88,6 +103,7 @@ func (t *Table) MarkAlive(id string) {
 	}
 }
 
+// Returns a copy of all the members.
 func (t *Table) Snapshot() []Member {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -99,6 +115,7 @@ func (t *Table) Snapshot() []Member {
 	return out
 }
 
+// Removes the member from the table, used rarely.
 func (t *Table) Remove(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

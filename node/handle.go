@@ -18,6 +18,7 @@ func (n *Node) Handle(msgType uint8, fn router.HandlerFunc) {
 
 // Called by the dialer node, when the connection was accepted by us.
 // We update the registry (ring), and the membership of the node.
+// Avoids internal loop by check at registry on id.
 func (n *Node) onHandshake(p peer.Peer, msg *message.Message) error {
 	id := string(msg.Payload)
 	if id == "" || id == n.cfg.ListenAddr {
@@ -30,8 +31,6 @@ func (n *Node) onHandshake(p peer.Peer, msg *message.Message) error {
 	}
 
 	p.SetID(id)
-
-	// overwrite is fine (RemoveIfMatch protects correctness)
 	n.registry.Add(id, p)
 
 	// membership handling (critical)
@@ -49,10 +48,12 @@ func (n *Node) onHandshake(p peer.Peer, msg *message.Message) error {
 	})
 }
 
+// When the other nodes check upon use for liveliness.
 func (n *Node) onPing(p peer.Peer, _ *message.Message) error {
 	return p.Send(&message.Message{Type: message.Pong})
 }
 
+// Receive reply for ping, marking the node as alive.
 func (n *Node) onPong(p peer.Peer, _ *message.Message) error {
 	id := p.ID()
 	if id == "" {
@@ -61,14 +62,15 @@ func (n *Node) onPong(p peer.Peer, _ *message.Message) error {
 
 	// This is a liveness confirmation, not a state transition
 	n.table.MarkAlive(id)
-	n.log.Debug("pong received", "id", id)
+	n.log.Info("pong received", "from", id)
 
 	return nil
 }
 
+// When we receive a updated state table from others, we upsert the nodes.
 func (n *Node) onGossip(p peer.Peer, m *message.Message) error {
 	incoming := codec.DecodeMembers(m.Payload)
-	n.log.Debug("gossip received", "from", p.ID(), "members", len(incoming))
+	n.log.Info("gossip received", "from", p.ID(), "members", len(incoming))
 
 	for _, member := range incoming {
 		if member.ID == n.cfg.ListenAddr {

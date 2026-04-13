@@ -231,16 +231,18 @@ func (n *Node) startLoops() {
 }
 
 // Periodically depending on ping interval checks the peers and accepts pong from them.
+// It picks k random peers and sends ping message to them.
 func (n *Node) pingLoop() {
 	tick := time.NewTicker(n.cfg.PingInterval)
 	defer tick.Stop()
+
 	for {
 		select {
 		case <-n.ctx.Done():
 			return
 		case <-tick.C:
 			peers := n.registry.RandomSubset(k)
-			n.log.Debug("pinging peers", "count", len(peers))
+			n.log.Info("pinging peers", "count", len(peers))
 
 			for _, p := range peers {
 				_ = p.Send(&message.Message{Type: message.Ping})
@@ -249,11 +251,17 @@ func (n *Node) pingLoop() {
 	}
 }
 
+// Failure loop checks the snapshot of membership table.
+// Depending on LastSeen, it updates the membership status/
+// indirect ping concept can be introduced here.
 func (n *Node) failureDetector() {
 	ticker := time.NewTicker(n.cfg.FailCheckInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
+		case <-n.ctx.Done():
+			return
 		case <-ticker.C:
 			now := time.Now()
 
@@ -273,17 +281,20 @@ func (n *Node) failureDetector() {
 					n.table.UpdateState(m.ID, member.Dead)
 				}
 			}
-		case <-n.ctx.Done():
-			return
 		}
 	}
 }
 
+// Gossip loops updates the table status, by eventual convergence.
+// Each node sends randomly the full snapshot to k nodes.
 func (n *Node) gossipLoop() {
 	ticker := time.NewTicker(n.cfg.GossipInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
+		case <-n.ctx.Done():
+			return
 		case <-ticker.C:
 			peers := n.registry.RandomSubset(k) // pick k random peers
 			snapshot := n.table.Snapshot()
@@ -294,9 +305,6 @@ func (n *Node) gossipLoop() {
 					Payload: codec.EncodeMembers(snapshot),
 				})
 			}
-
-		case <-n.ctx.Done():
-			return
 		}
 	}
 }

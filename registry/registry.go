@@ -94,7 +94,7 @@ func (r *Registry) RemoveIfMatch(id string, p peer.Peer) {
 	r.removeFromRing(id)
 }
 
-// Has checks whether a peer ID is currently registered.
+// Get checks whether a peer ID is currently registered and returns it.
 func (r *Registry) Get(id string) (peer.Peer, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -46,7 +46,7 @@
 ### Convergence
 
 - Each node sends a handshake message to existing one, which in turn receives it back. (Registry updated)
-- Not doing `indirect ping` in gossip, which allows us to check other nodes.
+- Not doing `indirect ping` in gossip, which allows us to check other nodes via third.
 
 #### Loops
 
@@ -71,5 +71,21 @@
 | Registry   | “I can route requests to these nodes”          |
 | Membership | “I believe these nodes are alive/suspect/dead” |
 
+### Kill
+
+```bash
+lsof -ti tcp:4001 | xargs -r kill -9
+lsof -ti tcp:4002 | xargs -r kill -9
+lsof -ti tcp:4003 | xargs -r kill -9
+```
+
 Fix logs
 timings
+
+✅ Membership (you’re here)
+→ Basic PUT/GET (single node first)
+→ Replication (N replicas)
+→ Quorum (R/W)
+→ Sloppy quorum
+→ Hinted handoff
+→ Rebalancing (last)
