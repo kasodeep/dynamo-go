@@ -15,8 +15,13 @@ import (
 	"github.com/kasodeep/dynamo-go/transport"
 )
 
-// randome peers.
+// random peers.
 var k int = 2
+
+// variables for sloppy quorum
+var N int = 3
+var R int = 1
+var W int = 1
 
 // Node is the remote node or a server providing the cluster service.
 // Each node belongs to a ring setup, maintaining registry of peers, it's own transport.
@@ -33,6 +38,9 @@ type Node struct {
 	registry  *registry.Registry
 	router    *router.Router
 	table     *member.Table
+
+	inflightMu sync.Mutex
+	inflight   map[string]*inflight
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -51,6 +59,7 @@ func New(cfg Config, t transport.Transport, log *slog.Logger) *Node {
 		registry:  registry.New(),
 		router:    router.New(),
 		table:     member.New(),
+		inflight:  make(map[string]*inflight),
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -60,7 +69,10 @@ func New(cfg Config, t transport.Transport, log *slog.Logger) *Node {
 	n.router.Handle(message.Pong, n.onPong)
 
 	n.router.Handle(message.Gossip, n.onGossip)
-
+	
+	n.router.Handle(message.PutRequest, n.onPutRequest)
+	n.router.Handle(message.WriteRequest, n.onWriteRequest)
+	n.router.Handle(message.WriteRequestAck, n.onWriteAck)
 	return n
 }
 
@@ -299,10 +311,15 @@ func (n *Node) gossipLoop() {
 			peers := n.registry.RandomSubset(k) // pick k random peers
 			snapshot := n.table.Snapshot()
 
+			payload, err := codec.EncodeMembers(snapshot)
+			if err != nil {
+				n.log.Error("error encoding members", "err", err)
+			}
+
 			for _, p := range peers {
 				_ = p.Send(&message.Message{
 					Type:    message.Gossip,
-					Payload: codec.EncodeMembers(snapshot),
+					Payload: payload,
 				})
 			}
 		}

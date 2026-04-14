@@ -11,6 +11,8 @@ type Object struct {
 }
 
 // Metadata represents the timestamp for the latest write for the object.
+// For represents the ID of the peer, to perform hinted handoff.
 type Metadata struct {
+	For       string    `json:"for"`
 	Timestamp time.Time `json:"timestamp"`
 }

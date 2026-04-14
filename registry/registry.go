@@ -149,6 +149,42 @@ func (r *Registry) removeFromRing(id string) {
 	}
 }
 
+func (r *Registry) NextFrom(key []byte, offset int) (peer.Peer, bool) {
+	r.mu.RLock()
+
+	if r.ring.Len() == 0 {
+		r.mu.RUnlock()
+		return nil, false
+	}
+
+	// snapshot keys
+	keys := r.ring.Keys()
+	r.mu.RUnlock()
+
+	startHash := hash(key)
+
+	// find start index (ceiling)
+	startIdx := 0
+	for i, k := range keys {
+		if k >= startHash {
+			startIdx = i
+			break
+		}
+		if i == len(keys)-1 {
+			startIdx = 0
+		}
+	}
+
+	// compute final index with offset
+	idx := (startIdx + offset) % len(keys)
+
+	r.mu.RLock()
+	p, ok := r.ring.Get(keys[idx])
+	r.mu.RUnlock()
+
+	return p, ok
+}
+
 // RandomSubset returns up to k distinct peers chosen uniformly at random.
 //
 // Properties:
