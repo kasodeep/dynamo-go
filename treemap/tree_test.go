@@ -41,10 +41,10 @@ func checkRB[K Key, V any](t *Tree[K, V]) string {
 			return ""
 		}
 		if n.color == red {
-			if isRed[K, V](n.left) {
+			if isRed(n.left) {
 				return fmt.Sprintf("consecutive reds at key %v (left child)", n.key)
 			}
-			if isRed[K, V](n.right) {
+			if isRed(n.right) {
 				return fmt.Sprintf("consecutive reds at key %v (right child)", n.key)
 			}
 		}

@@ -1,3 +1,5 @@
+// Package node denotes the Node (which a server to which connections can be established)
+// It contains the Node, which is developed by combining several abstraction layers.
 package node
 
 import (
@@ -6,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kasodeep/dynamo-go/codec"
 	"github.com/kasodeep/dynamo-go/member"
 	"github.com/kasodeep/dynamo-go/message"
 	"github.com/kasodeep/dynamo-go/peer"
@@ -15,20 +16,23 @@ import (
 	"github.com/kasodeep/dynamo-go/transport"
 )
 
-// random peers.
-var k int = 2
-
 // variables for sloppy quorum
 var N int = 3
 var R int = 1
 var W int = 1
 
-// Node is the remote node or a server providing the cluster service.
-// Each node belongs to a ring setup, maintaining registry of peers, it's own transport.
+// Node is the remote node or a server acting as a part of cluster.
+// Each node contains transport (to listen and dial connections).
+//
+// A registry to maintain the hashed ring and the cluster of peers.
+//
+// A table denoting the membership status (liveliness) of each node in the cluster.
+//
+// The serveConn, accepts the msg from the remote node, and routes to appropiate handler.
 // For each message type we must also add the router handler to handle it.
 //
 // Context:
-//   - It provides structured concurrecy, where every go routine can be cancelled and called of gracefully during shutdown.
+//   - It provides structured concurrecy, where every go routine (count by wg) can be cancelled and called of gracefully during shutdown.
 //   - The New func initializes it with cancel channel.
 type Node struct {
 	cfg Config
@@ -69,10 +73,10 @@ func New(cfg Config, t transport.Transport, log *slog.Logger) *Node {
 	n.router.Handle(message.Pong, n.onPong)
 
 	n.router.Handle(message.Gossip, n.onGossip)
-	
+
 	n.router.Handle(message.PutRequest, n.onPutRequest)
 	n.router.Handle(message.WriteRequest, n.onWriteRequest)
-	n.router.Handle(message.WriteRequestAck, n.onWriteAck)
+	n.router.Handle(message.WriteRequestAck, n.onWriteRequestAck)
 	return n
 }
 
@@ -185,6 +189,10 @@ func (n *Node) dialWithRetry(addr string) {
 
 // Serves the connection, so that we can receive data from the peer.
 // It dispatches the message router, to appropriately handle different types of message.
+//
+// Note: On Failure
+//  1. It remove the peer from the registry, as the conn is no longer valid.
+//  2. But the node is still part of the table, hence not touching it.
 func (n *Node) serveConn(p peer.Peer) {
 	defer func() {
 		if id := p.ID(); id != "" {
@@ -279,8 +287,9 @@ func (n *Node) failureDetector() {
 
 			for _, m := range n.table.Snapshot() {
 				if m.ID == n.cfg.ListenAddr {
-					continue
+					continue // avoid marking ourselves as dead or suspect.
 				}
+
 				delta := now.Sub(m.LastSeen)
 
 				if delta > n.cfg.SuspectInterval && m.State == member.Alive {
@@ -292,35 +301,6 @@ func (n *Node) failureDetector() {
 					n.log.Info("peer marked dead", "id", m.ID)
 					n.table.UpdateState(m.ID, member.Dead)
 				}
-			}
-		}
-	}
-}
-
-// Gossip loops updates the table status, by eventual convergence.
-// Each node sends randomly the full snapshot to k nodes.
-func (n *Node) gossipLoop() {
-	ticker := time.NewTicker(n.cfg.GossipInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-n.ctx.Done():
-			return
-		case <-ticker.C:
-			peers := n.registry.RandomSubset(k) // pick k random peers
-			snapshot := n.table.Snapshot()
-
-			payload, err := codec.EncodeMembers(snapshot)
-			if err != nil {
-				n.log.Error("error encoding members", "err", err)
-			}
-
-			for _, p := range peers {
-				_ = p.Send(&message.Message{
-					Type:    message.Gossip,
-					Payload: payload,
-				})
 			}
 		}
 	}

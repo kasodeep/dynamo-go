@@ -7,92 +7,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/kasodeep/dynamo-go/codec"
 	"github.com/kasodeep/dynamo-go/member"
 	"github.com/kasodeep/dynamo-go/message"
 	"github.com/kasodeep/dynamo-go/peer"
-	"github.com/kasodeep/dynamo-go/router"
 	"github.com/kasodeep/dynamo-go/store"
 )
 
-// Handle registers an application-level message handler.
-// Must be called before Start.
-func (n *Node) Handle(msgType uint8, fn router.HandlerFunc) {
-	n.router.Handle(msgType, fn)
-}
-
-// Called by the dialer node, when the connection was accepted by us.
-// We update the registry (ring), and the membership of the node.
-// Avoids internal loop by check at registry on id.
-func (n *Node) onHandshake(p peer.Peer, msg *message.Message) error {
-	id := string(msg.Payload)
-	if id == "" || id == n.cfg.ListenAddr {
-		return fmt.Errorf("node: empty handshake ID or bad ID from %s", p.RemoteAddr())
-	}
-
-	check, ok := n.registry.Get(id)
-	if ok && check == p {
-		return nil
-	}
-
-	p.SetID(id)
-	n.registry.Add(id, p)
-
-	// membership handling (critical)
-	if _, ok := n.table.Get(id); !ok {
-		n.table.Set(member.NewMember(id))
-	} else {
-		n.table.MarkAlive(id)
-	}
-
-	n.log.Info("peer registered", "id", id)
-
-	return p.Send(&message.Message{
-		Type:    message.Handshake,
-		Payload: []byte(n.cfg.ListenAddr),
-	})
-}
-
-// When the other nodes check upon use for liveliness.
-func (n *Node) onPing(p peer.Peer, _ *message.Message) error {
-	return p.Send(&message.Message{Type: message.Pong})
-}
-
-// Receive reply for ping, marking the node as alive.
-func (n *Node) onPong(p peer.Peer, _ *message.Message) error {
-	id := p.ID()
-	if id == "" {
-		return nil
-	}
-
-	// This is a liveness confirmation, not a state transition
-	n.table.MarkAlive(id)
-	n.log.Info("pong received", "from", id)
-
-	return nil
-}
-
-// When we receive a updated state table from others, we upsert the nodes.
-func (n *Node) onGossip(p peer.Peer, m *message.Message) error {
-	incoming, err := codec.DecodeMembers(m.Payload)
-
-	if err != nil {
-		return err
-	}
-
-	n.log.Info("gossip received", "from", p.ID(), "members", len(incoming))
-	for _, member := range incoming {
-		if member.ID == n.cfg.ListenAddr {
-			continue
-		}
-		n.table.Upsert(&member)
-	}
-
-	return nil
-}
-
 func (n *Node) onPutRequest(p peer.Peer, m *message.Message) error {
-	req, err := codec.DecodePutRequest(m.Payload)
+	req, err := store.DecodePutRequest(m.Payload)
 	if err != nil {
 		return err
 	}
@@ -158,6 +80,11 @@ func (n *Node) replicate(ctx context.Context, reqID string, obj store.Object) {
 			continue
 		}
 
+		mem, ok := n.table.Get(p.ID())
+		if !ok || mem.State != member.Alive {
+			continue
+		}
+
 		go func(offset int, p peer.Peer) {
 			o := obj
 
@@ -169,7 +96,7 @@ func (n *Node) replicate(ctx context.Context, reqID string, obj store.Object) {
 				o.Metadata.For = primary.ID()
 			}
 
-			payload, _ := codec.EncodeWriteRequest(&store.WriteRequest{
+			payload, _ := store.EncodeWriteRequest(&store.WriteRequest{
 				ID:  reqID,
 				Obj: o,
 			})
@@ -184,18 +111,15 @@ func (n *Node) replicate(ctx context.Context, reqID string, obj store.Object) {
 }
 
 func (n *Node) onWriteRequest(p peer.Peer, m *message.Message) error {
-	req, err := codec.DecodeWriteRequest(m.Payload)
+	req, err := store.DecodeWriteRequest(m.Payload)
 	if err != nil {
 		return err
 	}
 
-	// TODO: store locally
-	if err != nil {
-		return err
-	}
+	// TODO: store locally	
 
 	// send ack
-	payload, _ := codec.EncodeWriteAck(&store.WriteAck{
+	payload, _ := store.EncodeWriteAck(&store.WriteAck{
 		ID: req.ID,
 	})
 
@@ -205,8 +129,8 @@ func (n *Node) onWriteRequest(p peer.Peer, m *message.Message) error {
 	})
 }
 
-func (n *Node) onWriteAck(p peer.Peer, m *message.Message) error {
-	ack, err := codec.DecodeWriteAck(m.Payload)
+func (n *Node) onWriteRequestAck(p peer.Peer, m *message.Message) error {
+	ack, err := store.DecodeWriteAck(m.Payload)
 	if err != nil {
 		return err
 	}

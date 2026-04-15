@@ -2,8 +2,8 @@
 // backed by a treemap (ordered map). It maps virtual node hashes to peers.
 //
 // Design:
-//   - ring  : hash(vnode) -> peer (for routing)
-//   - nodes : peerID -> peer (for identity tracking)
+//   - ring  : hash(peerID) -> peer (for routing)
+//   - cluster : peerID -> peer (for identity tracking)
 //
 // Semantics:
 //
@@ -33,6 +33,8 @@
 package registry
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -45,18 +47,18 @@ import (
 // V is the number of virtual nodes per physical peer.
 var V = 2
 
-// Registry maintains a consistent hashing ring and peer identity map.
+// Registry maintains a consistent hashing ring and cluster map.
 type Registry struct {
-	mu    sync.RWMutex
-	ring  *treemap.Tree[string, peer.Peer]
-	nodes map[string]peer.Peer
+	mu      sync.RWMutex
+	ring    *treemap.Tree[string, peer.Peer]
+	cluster map[string]peer.Peer
 }
 
 // New initializes an empty registry.
 func New() *Registry {
 	return &Registry{
-		ring:  treemap.New[string, peer.Peer](),
-		nodes: make(map[string]peer.Peer),
+		ring:    treemap.New[string, peer.Peer](),
+		cluster: make(map[string]peer.Peer),
 	}
 }
 
@@ -73,7 +75,7 @@ func (r *Registry) Add(id string, p peer.Peer) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.nodes[id] = p
+	r.cluster[id] = p
 	r.addToRing(id, p)
 }
 
@@ -85,39 +87,40 @@ func (r *Registry) RemoveIfMatch(id string, p peer.Peer) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	current, exists := r.nodes[id]
+	current, exists := r.cluster[id]
 	if !exists || current != p {
 		return // stale or already replaced
 	}
 
-	delete(r.nodes, id)
+	delete(r.cluster, id)
 	r.removeFromRing(id)
 }
 
-// Get checks whether a peer ID is currently registered and returns it.
+// Get returns (peer, true), if the peer with id exists in the cluster.
+// Else it returns (nil, false)
 func (r *Registry) Get(id string) (peer.Peer, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	p, ok := r.nodes[id]
+	p, ok := r.cluster[id]
 	return p, ok
 }
 
-// Len returns the number of unique peers (not virtual nodes).
+// Len returns the number of nodes (actual) in the cluster.
 func (r *Registry) Len() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return len(r.nodes)
+	return len(r.cluster)
 }
 
-// Each iterates over all unique peers.
+// Each iterates over all nodes in the cluster.
 //
 // Guarantees:
 //   - Each peer is visited exactly once
 //   - Safe snapshot semantics (no lock during callback)
 func (r *Registry) Each(fn func(peer.Peer)) {
 	r.mu.RLock()
-	snapshot := make([]peer.Peer, 0, len(r.nodes))
-	for _, p := range r.nodes {
+	snapshot := make([]peer.Peer, 0, len(r.cluster))
+	for _, p := range r.cluster {
 		snapshot = append(snapshot, p)
 	}
 	r.mu.RUnlock()
@@ -149,6 +152,16 @@ func (r *Registry) removeFromRing(id string) {
 	}
 }
 
+// It convert the key to it's sha256 hash and provides, encoded hash.
+func hash(key []byte) string {
+	hash := sha256.Sum256(key)
+	return hex.EncodeToString(hash[:])
+}
+
+// NextFrom returns the peer from the virtual ring (hashed), that is larger than it's position
+// at an offset.
+//
+// It collects the snapshot of the keys in the ring. Identifies the startIdx, moves to offset and returns the peer.
 func (r *Registry) NextFrom(key []byte, offset int) (peer.Peer, bool) {
 	r.mu.RLock()
 
@@ -185,7 +198,7 @@ func (r *Registry) NextFrom(key []byte, offset int) (peer.Peer, bool) {
 	return p, ok
 }
 
-// RandomSubset returns up to k distinct peers chosen uniformly at random.
+// RandomSubset returns up to k distinct peers chosen uniformly at random from cluster.
 //
 // Properties:
 //   - No duplicates
@@ -196,14 +209,14 @@ func (r *Registry) RandomSubset(k int) []peer.Peer {
 	r.mu.RLock()
 
 	// snapshot
-	n := len(r.nodes)
+	n := len(r.cluster)
 	if n == 0 || k <= 0 {
 		r.mu.RUnlock()
 		return nil
 	}
 
 	peers := make([]peer.Peer, 0, n)
-	for _, p := range r.nodes {
+	for _, p := range r.cluster {
 		peers = append(peers, p)
 	}
 

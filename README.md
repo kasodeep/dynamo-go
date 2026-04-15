@@ -14,48 +14,49 @@
 
 ### Registry
 
-- `registry` abstracts the map of peers and provides thread-safe access to the peer connections.
-- It allows for adding, removing, and retrieving peers in a concurrent environment.
-- It uses consistent hashing using `treemap` to create and update the hash ring, plus maintains id to peer mapping for efficient lookups.
+- `registry` contains ring using `treemap` and the cluster using a simple map.
+- Each function provides a way to modify the node or peer belonging the ring or cluster.
+- Add and RemoveIfMatch works with both cluster and ring.
+- ForEach, Len, RandomSubset() works with the cluster.
+- NextFrom is important function and works with ring.
 
 ### Consistent Hashing
 
 - `treemap` provides custom implementation of red black tree, which is balanced bst, with O(log n) for insert, delete, and search.
+- We had the obsession to push, so we learned it, insert, rotation, and queries are clear.
+- Trying to understand how delete works.
 
 ### Router
 
 - `router` maps the message types to their corresponding handlers, allowing for organized message processing.
-- The handler function takes the peer and the msg as arguments.
+
+### Member
+
+- `member` represents the node in the cluster, and stores the state or liveliness of that node.
+- Updated when we receive a msg, or during handshake.
+- Majorly works with gossip to send the state and failure loop to mark the nodes as Suspect or Alive.
 
 ## Node
 
-`node` is the main struct representing a node in the cluster. It contains:
-- Configuration (`Config`)
-- Logger (`slog.Logger`)
-- Transport layer (`transport.Transport`)
-- Registry of peers (`registry.Registry`)
-- Membership table (`membership.Table`)
-- Router for message handling (`router.Router`)
-- Context and wait group for managing goroutines.
+- `node` is the main struct representing a node in the cluster.
+- TODO: Ensure we have TLS for trusted end user (sender).
 
-### Start
+## Protocols
 
-- Starts the listener and go routine to handle incoming connections. In turn spawns a servConn to read messages from the connection and route them to the appropriate handler.
-- Dials to bootstrap nodes to join the cluster and sends handshake messages. In turns spawns servConn.
+    For all protocols assume two server x (started 1st) and y are talking to each other.
+    For each protocol, we have two states to maintain, the registry and the table.
+    If we have a peer with ID in the registry, they will be in the table (either alive or dead).
 
-### Convergence
+### Handshake
 
-- Each node sends a handshake message to existing one, which in turn receives it back. (Registry updated)
-- Not doing `indirect ping` in gossip, which allows us to check other nodes via third.
+### Gossip Protocol
 
-#### Loops
+### Quorum Consensus
 
-- Starts a ping loop, failure loop and gossip loop.
+### Hinted Handoff
 
-### Config
+### Rebalancing
 
-`Config` struct defines the configuration for a node, including:
-- Listen address, Bootstrap nodes, intervals for now.
 
 ## Trade Offs
 
@@ -79,8 +80,8 @@ lsof -ti tcp:4002 | xargs -r kill -9
 lsof -ti tcp:4003 | xargs -r kill -9
 ```
 
-Fix logs
-timings
+TODO: Fix the send, use table.
+Fix inflight, and complete quorum consensus
 
 ✅ Membership (you’re here)
 → Basic PUT/GET (single node first)

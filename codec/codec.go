@@ -15,8 +15,8 @@ import (
 
 const maxPayload = 32 << 20 // 32 MiB hard cap
 
-// It writes the type and the length of payload first before streaming.
-// Then, if the payload exists, it streams it to the writer.
+// Wrtie writes the msg to w according to the wireframe protocol.
+// Callers should ensure that the payload len is at-max 32MiB, otherwise it throws an error.
 func Write(w io.Writer, msg *message.Message) error {
 	if len(msg.Payload) > maxPayload {
 		return fmt.Errorf("codec: payload %d exceeds max %d", len(msg.Payload), maxPayload)
@@ -36,7 +36,7 @@ func Write(w io.Writer, msg *message.Message) error {
 	return nil
 }
 
-// Decodes the type and the payload (using payload length), converts to a message struct.
+// Read reads the msg from r and decodes it (according to payload length).
 func Read(r io.Reader) (*message.Message, error) {
 	var hdr [5]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {

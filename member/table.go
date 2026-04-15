@@ -1,3 +1,18 @@
+// Package member provides a concurrency-safe membership table used for
+// tracking node liveness in a distributed system.
+//
+// It is designed for gossip-based protocols (e.g., SWIM-style), where
+// nodes exchange membership state and converge toward eventual consistency.
+//
+// Core properties:
+//   - Thread-safe access via RWMutex
+//   - Version-based conflict resolution
+//   - Deterministic state precedence (Dead > Suspect > Alive)
+//   - Snapshot isolation for readers
+//
+// Note:
+// During gossip protocol, we may receive a table with our id, so callers must ensure this void.
+// The two funcs using this void are Set and Upsert.
 package member
 
 import (
@@ -5,22 +20,26 @@ import (
 	"time"
 )
 
-// Maps the id of remote peer to it's member state.
-// Upsert, MarkAlive and UpdateState are used separately for each purpose.
-// For adding we need to use the Set method.
+// Table maintains a mapping of node IDs to their membership state.
+//
+// It is safe for concurrent use. All mutations are guarded by a write lock,
+// while reads use a read lock for better concurrency.
 type Table struct {
 	mu      sync.RWMutex
 	members map[string]*Member
 }
 
-// Returns a new empty table with an empty map.
+// New creates and returns an empty membership table.
 func New() *Table {
 	return &Table{
 		members: make(map[string]*Member),
 	}
 }
 
-// Returns the member and true if it is present, else returns false.
+// Get returns a copy of the Member associated with the given ID.
+//
+// The returned Member is a value copy, ensuring callers cannot mutate
+// internal state without going through the Table API.
 func (t *Table) Get(id string) (Member, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -29,11 +48,13 @@ func (t *Table) Get(id string) (Member, bool) {
 	if !ok {
 		return Member{}, false
 	}
-
 	return *m, true
 }
 
-// Set the member associated with the given id in it's data.
+// Set inserts or replaces the given Member.
+//
+// This is a direct write and does not perform version checks.
+// Intended for initialization or authoritative updates.
 func (t *Table) Set(m *Member) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -41,8 +62,18 @@ func (t *Table) Set(m *Member) {
 	t.members[m.ID] = m
 }
 
-// Used for gossip protocol, where incoming request provides different state.
-// Checks for exists, the versions, and handles worstState in same version.
+// Upsert merges an incoming Member into the table.
+//
+// Conflict resolution rules:
+//  1. If member does not exist → insert
+//  2. If incoming.Version > existing.Version:
+//     - Accept normally, BUT:
+//     - Reject unsafe transitions (e.g., Alive → Dead without local suspicion)
+//  3. If versions equal → choose worse state (with same safety guard)
+//
+// Safety:
+//   - Prevents blind Alive → Dead transitions from gossip
+//   - Ensures local failure detector has precedence over remote claims
 func (t *Table) Upsert(incoming *Member) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -50,6 +81,11 @@ func (t *Table) Upsert(incoming *Member) {
 	existing, ok := t.members[incoming.ID]
 	if !ok {
 		t.members[incoming.ID] = incoming
+		return
+	}
+
+	// Reject unsafe transition: Alive → Dead directly via gossip
+	if existing.State == Alive && incoming.State == Dead {
 		return
 	}
 
@@ -65,8 +101,14 @@ func (t *Table) Upsert(incoming *Member) {
 	}
 }
 
-// Only updates the state of the member.
-// Updates lastseen only when found to be of state alive.
+// UpdateState updates only the state of a member.
+//
+// Behavior:
+//   - Increments Version unconditionally
+//   - Updates State
+//   - Updates LastSeen only if state == Alive
+//
+// Used for local failure detection transitions.
 func (t *Table) UpdateState(id string, state State) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -84,8 +126,13 @@ func (t *Table) UpdateState(id string, state State) {
 	}
 }
 
-// Updates the version and the status along with last seen.
-// Useful for pong reaction, and reconnect handshakes after failure.
+// MarkAlive marks a member as Alive.
+//
+// Behavior:
+//   - Updates LastSeen timestamp
+//   - If state was not Alive, increments Version and sets Alive
+//
+// Used for successful ping/pong or reconnection events.
 func (t *Table) MarkAlive(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -103,7 +150,10 @@ func (t *Table) MarkAlive(id string) {
 	}
 }
 
-// Returns a copy of all the members.
+// Snapshot returns a consistent copy of all members.
+//
+// The returned slice contains value copies, ensuring callers cannot
+// mutate internal state. Suitable for gossip dissemination.
 func (t *Table) Snapshot() []Member {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -115,20 +165,12 @@ func (t *Table) Snapshot() []Member {
 	return out
 }
 
-// Removes the member from the table, used rarely.
+// Remove deletes a member from the table.
+//
+// This is typically used sparingly (e.g., tombstone cleanup).
 func (t *Table) Remove(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	delete(t.members, id)
-}
-
-// Defines failure severity ordering: DEAD > SUSPECT > ALIVE
-func worseState(a, b State) bool {
-	order := map[State]int{
-		Alive:   0,
-		Suspect: 1,
-		Dead:    2,
-	}
-	return order[a] > order[b]
 }
