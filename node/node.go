@@ -16,11 +16,6 @@ import (
 	"github.com/kasodeep/dynamo-go/transport"
 )
 
-// variables for sloppy quorum
-var N int = 3
-var R int = 1
-var W int = 1
-
 // Node is the remote node or a server acting as a part of cluster.
 // Each node contains transport (to listen and dial connections).
 //
@@ -38,34 +33,32 @@ type Node struct {
 	cfg Config
 	log *slog.Logger
 
-	transport transport.Transport
-	registry  *registry.Registry
-	router    *router.Router
-	table     *member.Table
-
-	inflightMu sync.Mutex
-	inflight   map[string]*inflight
+	transport   transport.Transport
+	registry    *registry.Registry
+	router      *router.Router
+	table       *member.Table
+	coordinator *Coordinator
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-// Initializes a new node, by configuring the defaults, context and the router.
-func New(cfg Config, t transport.Transport, log *slog.Logger) *Node {
+// Initializes a new node, by getting the root context, the config defaults, context and the router.
+func New(ctx context.Context, cfg Config, t transport.Transport, log *slog.Logger) *Node {
 	cfg.defaults()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 
 	n := &Node{
-		cfg:       cfg,
-		log:       log,
-		transport: t,
-		registry:  registry.New(),
-		router:    router.New(),
-		table:     member.New(),
-		inflight:  make(map[string]*inflight),
-		ctx:       ctx,
-		cancel:    cancel,
+		cfg:         cfg,
+		log:         log,
+		transport:   t,
+		registry:    registry.New(),
+		router:      router.New(),
+		table:       member.New(),
+		coordinator: NewCoordinator(),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 
 	n.router.Handle(message.Handshake, n.onHandshake)

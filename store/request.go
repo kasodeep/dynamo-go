@@ -4,31 +4,29 @@ import (
 	"encoding/json"
 )
 
-// Represents the request being sent to store the object.
+// PutRequest is the request sent by external gateway to any random node for storing the k,v pair
 type PutRequest struct {
 	Key   []byte `json:"key"`
 	Value []byte `json:"value"`
 }
 
+// Decodes the PutRequest, assumes that the data was encoded using json formatting.
+func DecodePutRequest(data []byte) (PutRequest, error) {
+	var req PutRequest
+	err := json.Unmarshal(data, &req)
+	return req, err
+}
+
+// WriteRequest wraps the object with the ID of the inflight request.
+// Allows the storing node in the cluster to return the ack.
 type WriteRequest struct {
 	ID  string `json:"id"`
 	Obj Object `json:"obj"`
 }
 
+// WriteAck abstracts the ID of the inflight request, denoting (ack) the object is stored.
 type WriteAck struct {
 	ID string `json:"id"`
-}
-
-// Represents the get request being sent to get the object.
-type GetRequest struct {
-	Key   []byte `json:"key"`
-	Value []byte `json:"value"`
-}
-
-func DecodePutRequest(data []byte) (PutRequest, error) {
-	var req PutRequest
-	err := json.Unmarshal(data, &req)
-	return req, err
 }
 
 func EncodeWriteRequest(req *WriteRequest) ([]byte, error) {
@@ -51,12 +49,8 @@ func DecodeWriteAck(data []byte) (WriteAck, error) {
 	return ack, err
 }
 
-func EncodeObject(obj Object) ([]byte, error) {
-	return json.Marshal(obj)
-}
-
-func DecodeObject(data []byte) (Object, error) {
-	var obj Object
-	err := json.Unmarshal(data, &obj)
-	return obj, err
+// Represents the get request being sent to get the object.
+type GetRequest struct {
+	Key   []byte `json:"key"`
+	Value []byte `json:"value"`
 }

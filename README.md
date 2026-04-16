@@ -41,6 +41,8 @@
 - `node` is the main struct representing a node in the cluster.
 - TODO: Ensure we have TLS for trusted end user (sender).
 
+### Graceful Shutdown
+
 ## Protocols
 
     For all protocols assume two server x (started 1st) and y are talking to each other.
@@ -72,6 +74,15 @@
 | Registry   | “I can route requests to these nodes”          |
 | Membership | “I believe these nodes are alive/suspect/dead” |
 
+| Type category                     | Copy behavior       |
+| --------------------------------- | ------------------- |
+| `int`, `bool`, `struct` (no refs) | ✅ deep copy         |
+| `*T` (pointer)                    | ❗ shared            |
+| `[]T` (slice)                     | ❗ shared            |
+| `map[K]V`                         | ❗ shared            |
+| `chan T`                          | ❗ shared            |
+| `time.Time`                       | ✅ safe (value type) |
+
 ### Kill
 
 ```bash
@@ -79,9 +90,6 @@ lsof -ti tcp:4001 | xargs -r kill -9
 lsof -ti tcp:4002 | xargs -r kill -9
 lsof -ti tcp:4003 | xargs -r kill -9
 ```
-
-TODO: Fix the send, use table.
-Fix inflight, and complete quorum consensus
 
 ✅ Membership (you’re here)
 → Basic PUT/GET (single node first)

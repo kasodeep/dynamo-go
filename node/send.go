@@ -12,7 +12,6 @@ func (n *Node) Broadcast(msg *message.Message) {
 	n.registry.Each(func(p peer.Peer) {
 		if err := p.Send(msg); err != nil {
 			n.log.Warn("broadcast failed", "peer", p.ID(), "err", err)
-			n.evict(p)
 		}
 	})
 }
@@ -26,9 +25,4 @@ func (n *Node) Send(peerID string, msg *message.Message) error {
 		return fmt.Errorf("node: peer %q not found", peerID)
 	}
 	return target.Send(msg)
-}
-
-func (n *Node) evict(p peer.Peer) {
-	n.registry.RemoveIfMatch(p.ID(), p)
-	p.Close()
 }
