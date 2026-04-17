@@ -112,6 +112,13 @@ func (r *Registry) Len() int {
 	return len(r.cluster)
 }
 
+// returns the length of the ring, containing virtual nodes.
+func (r *Registry) RingLen() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.ring.Len()
+}
+
 // Each iterates over all nodes in the cluster.
 //
 // Guarantees:

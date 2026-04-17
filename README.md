@@ -83,18 +83,9 @@
 | `chan T`                          | ❗ shared            |
 | `time.Time`                       | ✅ safe (value type) |
 
-### Kill
-
-```bash
-lsof -ti tcp:4001 | xargs -r kill -9
-lsof -ti tcp:4002 | xargs -r kill -9
-lsof -ti tcp:4003 | xargs -r kill -9
-```
-
-✅ Membership (you’re here)
-→ Basic PUT/GET (single node first)
-→ Replication (N replicas)
-→ Quorum (R/W)
-→ Sloppy quorum
+-> Quorum issue, not self in our own ring.
+-> if self node called, we can directly store.
+-> something on this
+-> Store
 → Hinted handoff
 → Rebalancing (last)

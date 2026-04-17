@@ -2,12 +2,14 @@ package node
 
 import "time"
 
-var suspect = time.Second * 4
-var dead = time.Second * 8
+var ping = time.Second * 2   // how often we ping
+var fail = time.Second * 2   // how often failure detector runs (same cadence)
+var gossip = time.Second * 5 // gossip dissemination
 
-var ping = time.Second * 3
-var fail = time.Second * 10
-var gossip = time.Second * 10
+// suspect after missing ~3 pings
+// dead after missing ~3 more
+var suspect = time.Second * 6 // > 3 * pingInterval
+var dead = time.Second * 12   // > suspect + 3 * pingInterval
 
 // It provides configuration to the nodes, with the listen addr, bootstrap nodes.
 // PingInterval denotes a way to perodically check the peer conn.

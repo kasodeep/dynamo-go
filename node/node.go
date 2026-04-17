@@ -67,9 +67,15 @@ func New(ctx context.Context, cfg Config, t transport.Transport, log *slog.Logge
 
 	n.router.Handle(message.Gossip, n.onGossip)
 
+	// write consensus
 	n.router.Handle(message.PutRequest, n.onPutRequest)
 	n.router.Handle(message.WriteRequest, n.onWriteRequest)
 	n.router.Handle(message.WriteRequestAck, n.onWriteRequestAck)
+
+	// read consensus
+	n.router.Handle(message.GetRequest, n.onGetRequest)
+	n.router.Handle(message.ReadRequest, n.onReadRequest)
+	n.router.Handle(message.ReadRequestAck, n.onReadRequestAck)
 	return n
 }
 
@@ -254,12 +260,8 @@ func (n *Node) pingLoop() {
 		case <-n.ctx.Done():
 			return
 		case <-tick.C:
-			peers := n.registry.RandomSubset(k)
-			n.log.Info("pinging peers", "count", len(peers))
-
-			for _, p := range peers {
-				_ = p.Send(&message.Message{Type: message.Ping})
-			}
+			n.log.Info("pinging peers", "count", n.registry.Len())
+			n.Broadcast(&message.Message{Type: message.Ping})
 		}
 	}
 }

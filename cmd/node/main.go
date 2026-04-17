@@ -19,7 +19,9 @@ func main() {
 	flag.Parse()
 
 	log := slog.New(
-		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{}),
+		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		}),
 	).With("node", *addr)
 
 	var peers []string

@@ -3,6 +3,9 @@ package node
 import (
 	"context"
 	"sync"
+	"sync/atomic"
+
+	"github.com/kasodeep/dynamo-go/store"
 )
 
 // inflight represents a request in flight, waiting for acks from other nodes.
@@ -17,19 +20,39 @@ type inflight struct {
 	needed  int
 	minimum int
 
-	once   sync.Once
-	done   chan struct{}
-	cancel context.CancelFunc
+	once      sync.Once
+	closeOnce sync.Once
+	done      chan struct{}
+	cancel    context.CancelFunc
+
+	best atomic.Value
 }
 
 func NewInflight(needed, minimum int, cancel context.CancelFunc) *inflight {
-	return &inflight{
+	inf := &inflight{
 		acks:    0,
 		needed:  needed,
 		minimum: minimum,
 		done:    make(chan struct{}),
 		cancel:  cancel,
 	}
+
+	// Initialize with zero-value object (required for atomic.Value)
+	inf.best.Store(store.Object{})
+	return inf
+}
+
+func (inf *inflight) UpdateBest(obj store.Object) {
+	current := inf.best.Load().(store.Object)
+
+	// LWW merge
+	if obj.Metadata.Timestamp.After(current.Metadata.Timestamp) {
+		inf.best.Store(obj)
+	}
+}
+
+func (inf *inflight) GetBest() store.Object {
+	return inf.best.Load().(store.Object)
 }
 
 // Coordinator is the concurrent safe access abstraction for inlfight request, for each node.

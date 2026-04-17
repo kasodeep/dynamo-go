@@ -109,6 +109,7 @@ func (n *Node) onGossip(p peer.Peer, m *message.Message) error {
 			continue
 		}
 		n.table.Upsert(&m)
+		n.table.MarkAlive(m.ID)
 	}
 
 	return nil
