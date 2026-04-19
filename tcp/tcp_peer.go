@@ -1,3 +1,10 @@
+// Package tcp provides tcp implementations of the Peer and Transport contracts.
+//
+// For Peer, it uses the net.Conn, bufio.Writer and mutex to ensure concurrent writes don't
+// mix up.
+//
+// Transport consist of the Listener, which allows to accept the inbound connections, wrap them as peers.
+// It also provides a way to dial connection to the remote nodes.
 package tcp
 
 import (
@@ -31,6 +38,8 @@ type Peer struct {
 	id   string
 }
 
+// Provides a new peer abstraction wrapping the conn.
+//
 // We wrap the conn with a bufio writer, so that using Flush(), we can provide the entire msg at once.
 // Use conn directly for very low latency or low messaging.
 func NewPeer(conn net.Conn) *Peer {

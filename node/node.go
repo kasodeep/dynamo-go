@@ -1,12 +1,14 @@
+// Package node denotes the Node (which a server to which connections can be established)
+// It contains the Node, which is developed by combining several abstraction layers.
 package node
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/kasodeep/dynamo-go/member"
 	"github.com/kasodeep/dynamo-go/message"
 	"github.com/kasodeep/dynamo-go/peer"
 	"github.com/kasodeep/dynamo-go/registry"
@@ -14,66 +16,76 @@ import (
 	"github.com/kasodeep/dynamo-go/transport"
 )
 
-type Config struct {
-	// ListenAddr is both the bind address AND the stable node ID.
-	ListenAddr     string
-	BootstrapAddrs []string
-
-	// DialTimeout for outbound connections. Default 5s.
-	DialTimeout time.Duration
-
-	// PingInterval keeps connections alive. 0 disables. Default 10s.
-	PingInterval time.Duration
-}
-
-func (c *Config) defaults() {
-	if c.DialTimeout == 0 {
-		c.DialTimeout = 5 * time.Second
-	}
-	if c.PingInterval == 0 {
-		c.PingInterval = 10 * time.Second
-	}
-}
-
+// Node is the remote node or a server acting as a part of cluster.
+// Each node contains transport (to listen and dial connections).
+//
+// A registry to maintain the hashed ring and the cluster of peers.
+//
+// A table denoting the membership status (liveliness) of each node in the cluster.
+//
+// The serveConn, accepts the msg from the remote node, and routes to appropiate handler.
+// For each message type we must also add the router handler to handle it.
+//
+// Context:
+//   - It provides structured concurrecy, where every go routine (count by wg) can be cancelled and called of gracefully during shutdown.
+//   - The New func initializes it with cancel channel.
 type Node struct {
-	cfg       Config
-	log       *slog.Logger
-	transport transport.Transport
-	registry  *registry.Registry
-	router    *router.Router
+	cfg Config
+	log *slog.Logger
+
+	transport   transport.Transport
+	registry    *registry.Registry
+	router      *router.Router
+	table       *member.Table
+	coordinator *Coordinator
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-func New(cfg Config, t transport.Transport, log *slog.Logger) *Node {
+// Initializes a new node, by getting the root context, the config defaults, context and the router.
+func New(ctx context.Context, cfg Config, t transport.Transport, log *slog.Logger) *Node {
 	cfg.defaults()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 
 	n := &Node{
-		cfg:       cfg,
-		log:       log,
-		transport: t,
-		registry:  registry.New(),
-		router:    router.New(),
-		ctx:       ctx,
-		cancel:    cancel,
+		cfg:         cfg,
+		log:         log,
+		transport:   t,
+		registry:    registry.New(),
+		router:      router.New(),
+		table:       member.New(),
+		coordinator: NewCoordinator(),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
+
+	// adding us to the ring and table
+	n.registry.AddSelf(n.cfg.ListenAddr)
+	n.table.Set(member.NewMember(n.cfg.ListenAddr))
 
 	n.router.Handle(message.Handshake, n.onHandshake)
 	n.router.Handle(message.Ping, n.onPing)
 	n.router.Handle(message.Pong, n.onPong)
 
+	n.router.Handle(message.Gossip, n.onGossip)
+
+	// write consensus
+	n.router.Handle(message.PutRequest, n.onPutRequest)
+	n.router.Handle(message.WriteRequest, n.onWriteRequest)
+	n.router.Handle(message.WriteRequestAck, n.onWriteRequestAck)
+
+	// read consensus
+	n.router.Handle(message.GetRequest, n.onGetRequest)
+	n.router.Handle(message.ReadRequest, n.onReadRequest)
+	n.router.Handle(message.ReadRequestAck, n.onReadRequestAck)
 	return n
 }
 
-// Handle registers an application-level message handler.
-// Must be called before Start.
-func (n *Node) Handle(msgType uint8, fn router.HandlerFunc) {
-	n.router.Handle(msgType, fn)
-}
-
+// Starts the node, to listen of the server address, plus dial to bootstrap nodes.
+// It starts to Listen on the transport, adds to wg and calls a go routine to accept connections.
+// Dials a connection with retry to bootstrap nodes.
 func (n *Node) Start() error {
 	if err := n.transport.Listen(n.cfg.ListenAddr); err != nil {
 		return err
@@ -93,54 +105,25 @@ func (n *Node) Start() error {
 		go n.dialWithRetry(addr)
 	}
 
-	if n.cfg.PingInterval > 0 {
-		n.wg.Add(1)
-		go func() {
-			defer n.wg.Done()
-			n.pingLoop()
-		}()
-	}
-
+	n.startLoops()
 	return nil
 }
 
+// Provides a way to stop the node, by closing the context, so that all go routines are collected.
+// Closes the transport connection to stop listening, and waits for the go routines to complete.
 func (n *Node) Stop() {
 	n.cancel()
 	n.transport.Close()
 	n.wg.Wait()
 }
 
-// Broadcast sends a message to all registered peers.
-func (n *Node) Broadcast(msg *message.Message) {
-	n.registry.Each(func(p peer.Peer) {
-		if err := p.Send(msg); err != nil {
-			n.log.Warn("broadcast failed", "peer", p.ID(), "err", err)
-			n.evict(p)
-		}
-	})
-}
-
-// Send sends a message to a specific peer by its stable ID.
-func (n *Node) Send(peerID string, msg *message.Message) error {
-	// We don't expose the registry directly — keep the lookup internal.
-	var target peer.Peer
-	n.registry.Each(func(p peer.Peer) {
-		if p.ID() == peerID {
-			target = p
-		}
-	})
-	if target == nil {
-		return fmt.Errorf("node: peer %q not found", peerID)
-	}
-	return target.Send(msg)
-}
-
+// Returns the length of the number of peers (nodes)
 func (n *Node) PeerCount() int {
 	return n.registry.Len()
 }
 
-// --- internal ---
-
+// Starts accepting the conn, and generates a peer.
+// Serves the connection
 func (n *Node) acceptLoop() {
 	for {
 		p, err := n.transport.Accept()
@@ -162,6 +145,8 @@ func (n *Node) acceptLoop() {
 	}
 }
 
+// Dial with retry uses exponential backoff, to connect to the remote node.
+// Sends the handshake message with ListenAddr (as our peerID)
 func (n *Node) dialWithRetry(addr string) {
 	backoff := time.Second
 	for {
@@ -205,10 +190,16 @@ func (n *Node) dialWithRetry(addr string) {
 	}
 }
 
+// Serves the connection, so that we can receive data from the peer.
+// It dispatches the message router, to appropriately handle different types of message.
+//
+// Note: On Failure
+//  1. It remove the peer from the registry, as the conn is no longer valid.
+//  2. But the node is still part of the table, hence not touching it.
 func (n *Node) serveConn(p peer.Peer) {
 	defer func() {
 		if id := p.ID(); id != "" {
-			n.registry.Remove(id)
+			n.registry.RemoveIfMatch(id, p)
 			n.log.Info("peer disconnected", "id", id)
 		}
 		p.Close()
@@ -225,56 +216,91 @@ func (n *Node) serveConn(p peer.Peer) {
 			return
 		}
 
+		if id := p.ID(); id != "" {
+			n.table.MarkAlive(id)
+		}
+
 		if err := n.router.Dispatch(p, msg); err != nil {
 			n.log.Warn("dispatch error", "peer", p.RemoteAddr(), "type", msg.Type, "err", err)
 		}
 	}
 }
 
-func (n *Node) evict(p peer.Peer) {
-	n.registry.Remove(p.ID())
-	p.Close()
+// Starts the ping, failure and gossip loops on different go routines for each node.
+func (n *Node) startLoops() {
+	if n.cfg.PingInterval > 0 {
+		n.wg.Add(1)
+		go func() {
+			defer n.wg.Done()
+			n.pingLoop()
+		}()
+	}
+
+	if n.cfg.FailCheckInterval > 0 {
+		n.wg.Add(1)
+		go func() {
+			defer n.wg.Done()
+			n.failureDetector()
+		}()
+	}
+
+	if n.cfg.GossipInterval > 0 {
+		n.wg.Add(1)
+		go func() {
+			defer n.wg.Done()
+			n.gossipLoop()
+		}()
+	}
 }
 
+// Periodically depending on ping interval checks the peers and accepts pong from them.
+// It picks k random peers and sends ping message to them.
 func (n *Node) pingLoop() {
 	tick := time.NewTicker(n.cfg.PingInterval)
 	defer tick.Stop()
+
 	for {
 		select {
 		case <-n.ctx.Done():
 			return
 		case <-tick.C:
+			n.log.Info("pinging peers", "count", n.registry.Len())
 			n.Broadcast(&message.Message{Type: message.Ping})
 		}
 	}
 }
 
-// --- built-in handlers ---
+// Failure loop checks the snapshot of membership table.
+// Depending on LastSeen, it updates the membership status/
+// indirect ping concept can be introduced here.
+func (n *Node) failureDetector() {
+	ticker := time.NewTicker(n.cfg.FailCheckInterval)
+	defer ticker.Stop()
 
-func (n *Node) onHandshake(p peer.Peer, msg *message.Message) error {
-	id := string(msg.Payload)
-	if id == "" {
-		return fmt.Errorf("node: empty handshake ID from %s", p.RemoteAddr())
+	for {
+		select {
+		case <-n.ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+
+			for _, m := range n.table.Snapshot() {
+				if m.ID == n.cfg.ListenAddr {
+					continue // avoid marking ourselves as dead or suspect.
+				}
+
+				delta := now.Sub(m.LastSeen)
+
+				if delta > n.cfg.SuspectInterval && m.State == member.Alive {
+					n.log.Warn("peer marked suspect", "id", m.ID)
+					n.table.UpdateState(m.ID, member.Suspect)
+				}
+
+				if delta > n.cfg.DeadInterval && m.State == member.Suspect {
+					n.log.Info("peer marked dead", "id", m.ID)
+					n.table.UpdateState(m.ID, member.Dead)
+				}
+			}
+		}
 	}
-	if n.registry.Has(id) {
-		n.log.Info("duplicate connection, dropping", "id", id)
-		return fmt.Errorf("node: duplicate peer %s", id)
-	}
-	p.SetID(id)
-	n.registry.Add(id, p)
-	n.log.Info("peer registered", "id", id)
-
-	// Reply with our own ID so the dialer can register us too.
-	return p.Send(&message.Message{
-		Type:    message.Handshake,
-		Payload: []byte(n.cfg.ListenAddr),
-	})
-}
-
-func (n *Node) onPing(p peer.Peer, _ *message.Message) error {
-	return p.Send(&message.Message{Type: message.Pong})
-}
-
-func (n *Node) onPong(_ peer.Peer, _ *message.Message) error {
-	return nil
 }
