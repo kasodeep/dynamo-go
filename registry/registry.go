@@ -1,8 +1,8 @@
 // Package registry provides a thread-safe consistent hashing registry
-// backed by a treemap (ordered map). It maps virtual node hashes to peers.
+// backed by a treemap (ordered map). It maps hash(peerID) -> peerID -> peer
 //
 // Design:
-//   - ring  : hash(peerID) -> peer (for routing)
+//   - ring  : hash(peerID) -> peerID (for key position)
 //   - cluster : peerID -> peer (for identity tracking)
 //
 // Semantics:
@@ -50,19 +50,19 @@ var V = 2
 // Registry maintains a consistent hashing ring and cluster map.
 type Registry struct {
 	mu      sync.RWMutex
-	ring    *treemap.Tree[string, peer.Peer]
+	ring    *treemap.Tree[string, string]
 	cluster map[string]peer.Peer
 }
 
 // New initializes an empty registry.
 func New() *Registry {
 	return &Registry{
-		ring:    treemap.New[string, peer.Peer](),
+		ring:    treemap.New[string, string](),
 		cluster: make(map[string]peer.Peer),
 	}
 }
 
-// Add inserts or replaces a peer by ID.
+// Add inserts or replaces a peer in the ring and the cluster.
 //
 // Behavior:
 //   - If id does not exist → inserts new peer
@@ -76,7 +76,16 @@ func (r *Registry) Add(id string, p peer.Peer) {
 	defer r.mu.Unlock()
 
 	r.cluster[id] = p
-	r.addToRing(id, p)
+	r.addToRing(id)
+}
+
+// AddSelf inserts the current node maintaining the registry into the ring.
+// This addition allows us to ensure that we are a part of the ring, but no peer connection to us.
+func (r *Registry) AddSelf(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.addToRing(id)
 }
 
 // RemoveIfMatch removes a peer ONLY if the provided peer matches
@@ -112,7 +121,7 @@ func (r *Registry) Len() int {
 	return len(r.cluster)
 }
 
-// returns the length of the ring, containing virtual nodes.
+// returns the length of the ring, number of virtual nodes.
 func (r *Registry) RingLen() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -137,14 +146,14 @@ func (r *Registry) Each(fn func(peer.Peer)) {
 	}
 }
 
-// addToRing inserts V virtual nodes for the given peer.
-func (r *Registry) addToRing(id string, p peer.Peer) {
+// addToRing inserts V virtual nodes for the given node with id.
+func (r *Registry) addToRing(id string) {
 	base := id + "_"
 
 	for i := 1; i <= V; i++ {
 		key := base + strconv.Itoa(i)
 		hash := hash([]byte(key))
-		r.ring.Insert(hash, p)
+		r.ring.Insert(hash, id)
 	}
 }
 
@@ -163,6 +172,49 @@ func (r *Registry) removeFromRing(id string) {
 func hash(key []byte) string {
 	hash := sha256.Sum256(key)
 	return hex.EncodeToString(hash[:])
+}
+
+// NodesFrom returns the ids of the nodes in the ring, they may contain duplicate.
+// It returns the id array, along with the length of the ring.
+func (r *Registry) NodesFrom(key []byte) ([]string, int) {
+	r.mu.RLock()
+
+	if r.ring.Len() == 0 {
+		r.mu.RUnlock()
+		return nil, 0
+	}
+
+	// snapshot keys
+	keys := r.ring.Keys()
+	count := len(keys)
+
+	startHash := hash(key)
+	ids := make([]string, 0, count)
+
+	// find start index (ceiling)
+	startIdx := 0
+	for i, k := range keys {
+		if k >= startHash {
+			startIdx = i
+			break
+		}
+		if i == count-1 {
+			startIdx = 0
+		}
+	}
+
+	for len(ids) < count {
+		id, ok := r.ring.Get(keys[startIdx])
+		if !ok {
+			return ids, len(ids)
+		}
+
+		ids = append(ids, id)
+		startIdx = (startIdx + 1) % count
+	}
+
+	r.mu.RUnlock()
+	return ids, len(ids)
 }
 
 // NextFrom returns the peer from the virtual ring (hashed), that is larger than it's position
@@ -199,7 +251,8 @@ func (r *Registry) NextFrom(key []byte, offset int) (peer.Peer, bool) {
 	idx := (startIdx + offset) % len(keys)
 
 	r.mu.RLock()
-	p, ok := r.ring.Get(keys[idx])
+	id, ok := r.ring.Get(keys[idx])
+	p, ok := r.cluster[id]
 	r.mu.RUnlock()
 
 	return p, ok

@@ -83,9 +83,5 @@
 | `chan T`                          | ❗ shared            |
 | `time.Time`                       | ✅ safe (value type) |
 
--> Quorum issue, not self in our own ring.
--> if self node called, we can directly store.
--> something on this
--> Store
 → Hinted handoff
 → Rebalancing (last)

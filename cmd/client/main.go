@@ -19,7 +19,7 @@ func main() {
 
 	// ---------- PUT ----------
 	put := store.PutRequest{
-		Key:   []byte("foo"),
+		Key:   []byte("deep"),
 		Value: []byte("bar"),
 	}
 

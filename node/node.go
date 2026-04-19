@@ -61,6 +61,10 @@ func New(ctx context.Context, cfg Config, t transport.Transport, log *slog.Logge
 		cancel:      cancel,
 	}
 
+	// adding us to the ring and table
+	n.registry.AddSelf(n.cfg.ListenAddr)
+	n.table.Set(member.NewMember(n.cfg.ListenAddr))
+
 	n.router.Handle(message.Handshake, n.onHandshake)
 	n.router.Handle(message.Ping, n.onPing)
 	n.router.Handle(message.Pong, n.onPong)
