@@ -13,6 +13,7 @@ import (
 	"github.com/kasodeep/dynamo-go/peer"
 	"github.com/kasodeep/dynamo-go/registry"
 	"github.com/kasodeep/dynamo-go/router"
+	"github.com/kasodeep/dynamo-go/store"
 	"github.com/kasodeep/dynamo-go/transport"
 )
 
@@ -37,6 +38,7 @@ type Node struct {
 	registry    *registry.Registry
 	router      *router.Router
 	table       *member.Table
+	store       *store.Store
 	coordinator *Coordinator
 
 	ctx    context.Context
@@ -48,6 +50,9 @@ type Node struct {
 func New(ctx context.Context, cfg Config, t transport.Transport, log *slog.Logger) *Node {
 	cfg.defaults()
 	ctx, cancel := context.WithCancel(ctx)
+	
+	nodeId := cfg.ListenAddr
+	st, _ := store.New(nodeId)
 
 	n := &Node{
 		cfg:         cfg,
@@ -56,14 +61,15 @@ func New(ctx context.Context, cfg Config, t transport.Transport, log *slog.Logge
 		registry:    registry.New(),
 		router:      router.New(),
 		table:       member.New(),
+		store:       st,
 		coordinator: NewCoordinator(),
 		ctx:         ctx,
 		cancel:      cancel,
 	}
 
 	// adding us to the ring and table
-	n.registry.AddSelf(n.cfg.ListenAddr)
-	n.table.Set(member.NewMember(n.cfg.ListenAddr))
+	n.registry.AddSelf(nodeId)
+	n.table.Set(member.NewMember(nodeId))
 
 	n.router.Handle(message.Handshake, n.onHandshake)
 	n.router.Handle(message.Ping, n.onPing)
@@ -114,6 +120,7 @@ func (n *Node) Start() error {
 func (n *Node) Stop() {
 	n.cancel()
 	n.transport.Close()
+	n.store.Close()
 	n.wg.Wait()
 }
 

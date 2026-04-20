@@ -38,7 +38,7 @@ func main() {
 
 	// ---------- GET ----------
 	get := store.GetRequest{
-		Key: []byte("foo"),
+		Key: []byte("deep"),
 	}
 
 	payload, _ = store.EncodeGetRequest(&get)

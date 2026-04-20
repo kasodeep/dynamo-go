@@ -10,6 +10,7 @@ import (
 	"github.com/kasodeep/dynamo-go/member"
 	"github.com/kasodeep/dynamo-go/message"
 	"github.com/kasodeep/dynamo-go/peer"
+	"github.com/kasodeep/dynamo-go/registry"
 	"github.com/kasodeep/dynamo-go/store"
 )
 
@@ -161,7 +162,7 @@ func (n *Node) replicate(ctx context.Context, reqID string, obj store.Object) {
 
 	// On a cluster smaller than N, the preference list is the whole ring.
 	prefLen := N
-	if ringLen < N {
+	if (ringLen / registry.V) < N {
 		prefLen = ringLen
 	}
 
@@ -220,7 +221,7 @@ func (n *Node) replicate(ctx context.Context, reqID string, obj store.Object) {
 
 		// Node is alive — write locally or send over the network.
 		if id == n.cfg.ListenAddr {
-			// TODO: Store locally
+			n.store.WriteObject(obj)
 			n.coordinator.OnLocalAck(reqID)
 			continue
 		}
@@ -287,11 +288,7 @@ func (n *Node) replicate(ctx context.Context, reqID string, obj store.Object) {
 //	The caller owns fallbackCursor. We return the new position so the caller
 //	can advance it after committing to use the fallback, ensuring subsequent
 //	calls to findFallback do not re-examine already-consumed positions.
-func (n *Node) findFallback(
-	allNodes []string,
-	startIdx int,
-	assigned map[string]struct{},
-) (id string, nextCursor int) {
+func (n *Node) findFallback(allNodes []string, startIdx int, assigned map[string]struct{}) (id string, nextCursor int) {
 	for i := startIdx; i < len(allNodes); i++ {
 		candidate := allNodes[i]
 
@@ -335,7 +332,7 @@ func (n *Node) sendHintedWrite(
 
 	// Self is the fallback — store locally.
 	if fallbackID == n.cfg.ListenAddr {
-		// store locally
+		n.store.WriteHintedObject(obj)
 		n.coordinator.OnLocalAck(reqID)
 		return
 	}
@@ -398,7 +395,6 @@ func (n *Node) sendHintedWrite(
 //
 //	The ack is sent after local persistence so the coordinator only counts
 //	durable acks. Sending before fsync would violate the W guarantee on crash.
-//	TODO: flush to disk (fsync) before acking if using a WAL-backed store.
 func (n *Node) onWriteRequest(p peer.Peer, m *message.Message) error {
 	req, err := store.DecodeWriteRequest(m.Payload)
 	if err != nil {
@@ -412,7 +408,11 @@ func (n *Node) onWriteRequest(p peer.Peer, m *message.Message) error {
 		"from", p.ID(),
 	)
 
-	// TODO: store locally
+	// storing the object locally.
+	_, err = n.store.WriteObject(req.Obj)
+	if err != nil {
+		return err
+	}
 
 	payload, _ := store.EncodeWriteAck(&store.WriteAck{
 		ID: req.ID,
@@ -520,23 +520,41 @@ func (n *Node) onGetRequest(p peer.Peer, m *message.Message) error {
 //
 // Future hook: when N responses arrive, compare timestamps and issue
 // read-repair writes to replicas that returned stale data.
-func (n *Node) readReplicate(ctx context.Context, reqID string, key []byte) {	
+func (n *Node) readReplicate(ctx context.Context, reqID string, key []byte) {
+	allNodes, ringLen := n.registry.NodesFrom(key)
+
+	prefLen := N
+	if (ringLen / registry.V) < N {
+		prefLen = ringLen
+	}
+
 	sem := make(chan struct{}, maxConcurrentSends)
 
-	for offset := 0; offset < N; offset++ {
+	for i := 0; i < prefLen; i++ {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
 
-		p, ok := n.registry.NextFrom(key, offset)
-		if !ok {
+		id := allNodes[i]
+
+		mem, ok := n.table.Get(id)
+		if !ok || mem.State == member.Dead {
 			continue
 		}
 
-		mem, ok := n.table.Get(p.ID())
-		if !ok || mem.State == member.Dead {
+		if id == n.cfg.ListenAddr {
+			obj, err := n.store.GetObject(key)
+			if err != nil {
+				continue
+			}
+			n.coordinator.OnReadAck(reqID, obj)
+			continue
+		}
+
+		p, ok := n.registry.Get(id)
+		if !ok {
 			continue
 		}
 
@@ -592,8 +610,10 @@ func (n *Node) onReadRequest(p peer.Peer, m *message.Message) error {
 		"from", p.ID(),
 	)
 
-	// obj, _ := n.store.Get(req.Key)
-	obj := store.Object{}
+	obj, err := n.store.GetObject(req.Key)
+	if err != nil {
+		return err
+	}
 
 	payload, _ := store.EncodeReadAck(&store.ReadAck{
 		ID:  req.ID,
