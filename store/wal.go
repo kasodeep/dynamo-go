@@ -9,94 +9,78 @@ import (
 	"time"
 )
 
-// The WAL ensures that every mutation is persisted to disk before being
-// acknowledged. On crash recovery, the WAL is replayed to reconstruct
-// in-memory state that had not yet been flushed to the SSTable layer.
+// WAL ensures every mutation is durable before it is acknowledged.
+// On crash recovery the WAL is replayed to rebuild in-memory state
+// that was not yet flushed to the SSTable layer.
 //
-// # Wire Format
+// Wire format per record:
 //
-// Each record is serialized as a flat binary structure:
+//	┌──────────────────────────────────────────────────────────┐
+//	│ Length      (4)  – total record size in bytes            │
+//	│ Checksum    (4)  – CRC32 over [Sequence..Value]          │
+//	│ Sequence    (8)  – monotonically increasing LSN          │
+//	│ Timestamp   (8)  – Unix nano, UTC                        │
+//	│ OpType      (1)  – Put / Delete / Hinted                 │
+//	│ ForLen      (4)  – length of Metadata.For (0 for Put/Del)│
+//	│ KeyLen      (4)  – length of Key                         │
+//	│ ValueLen    (4)  – length of Value                       │
+//	│ For         (ForLen bytes)                               │
+//	│ Key         (KeyLen bytes)                               │
+//	│ Value       (ValueLen bytes)                             │
+//	└──────────────────────────────────────────────────────────┘
 //
-//	┌─────────────────────────────────────────────────────┐
-//	│ Length   (4 bytes) – total record size in bytes      │
-//	│ Checksum (4 bytes) – CRC32 over [OpType..Value]      │
-//	│ Sequence (8 bytes) – monotonically increasing LSN    │
-//	│ OpType   (1 byte)  – operation kind (Put/Del/Hinted) │
-//	│ KeyLen   (4 bytes) – length of Key in bytes          │
-//	│ ValueLen (4 bytes) – length of Value in bytes        │
-//	│ Key      (KeyLen bytes)                               │
-//	│ Value    (ValueLen bytes)                             │
-//	└─────────────────────────────────────────────────────┘
+// Fixed header: 37 bytes. Timestamp and For are included so that
+// a full Object can be reconstructed from the WAL alone, without
+// consulting any other data structure.
 //
-// Fixed header is 25 bytes. Variable-length Key and Value follow.
-//
-// # Concurrency model
-//
-// A single goroutine (run) owns the file descriptor. Callers send
-// pre-serialized records over a buffered channel and block until
-// the record is written. Fsync is issued on a 10 ms ticker so that
-// burst writes are batched, reducing syscall overhead while bounding
-// the durability window.
+// Concurrency: a single goroutine owns the file descriptor.
+// Callers send pre-serialised records over a buffered channel and
+// block until the OS page-cache write completes. Fsync is batched
+// on a 10 ms ticker so that burst writes share one syscall.
 
-// OpType distinguishes the kind of mutation recorded in the WAL.
-// The recovery logic branches on this to reconstruct the correct state.
+// OpType distinguishes mutation kinds in the WAL.
 type OpType uint8
 
 const (
-	OpPut OpType = iota + 1
-	OpDelete
-	
-	// OpHinted records a write destined for a temporarily unavailable peer.
-	OpHinted
+	OpPut    OpType = iota + 1
+	OpDelete        // tombstone; Value is empty on disk
+	OpHinted        // write destined for a temporarily unavailable peer
 )
 
-// walHeaderSize is the fixed-width prefix of every WAL record.
+// walHeaderSize is the fixed prefix of every record (bytes).
 //
-//	4 (Length) + 4 (Checksum) + 8 (Sequence) + 1 (OpType) + 4 (KeyLen) + 4 (ValueLen)
-const walHeaderSize = 25
+//	4 (Length) + 4 (Checksum) + 8 (Sequence) + 8 (Timestamp)
+//	+ 1 (OpType) + 4 (ForLen) + 4 (KeyLen) + 4 (ValueLen) = 37
+const walHeaderSize = 37
 
-// walRecord is a parsed in-memory representation of a single WAL entry.
-// It mirrors WALEntry but is the authoritative type used internally by the WAL.
+// walRecord is the parsed in-memory form of a WAL entry.
 type walRecord struct {
-	Length   uint32 // total serialized size, including header
-	Checksum uint32 // CRC32IEEE over payload bytes [OpType..Value]
-	Sequence uint64 // log sequence number (LSN)
-	OpType   OpType
-	KeyLen   uint32
-	ValueLen uint32
-	Key      []byte
-	Value    []byte
+	Length    uint32
+	Checksum  uint32
+	Sequence  uint64
+	Timestamp time.Time
+	OpType    OpType
+	For       string // non-empty only for OpHinted
+	Key       []byte
+	Value     []byte
 }
 
-// WAL is a write-ahead log backed by a single append-only file.
-//
-// All writes are serialized through an internal goroutine that owns
-// the file descriptor, eliminating the need for explicit locking on
-// the hot path.
+// WAL is an append-only write-ahead log backed by a single file.
 type WAL struct {
-	f        *os.File
-	ch       chan walAppend // inbound serialized records + ack channel
-	done     chan struct{}  // signals the run goroutine to stop
-	seq      atomic.Uint64  // logical sequence counter (LSN source)
-	syncErrc chan error     // propagates sync errors back to callers
+	f    *os.File
+	ch   chan walAppend
+	done chan struct{}
+	seq  atomic.Uint64
 }
 
-// walAppend bundles a serialized record with a one-shot reply channel
-// so that Append can block until the record is durably written.
 type walAppend struct {
 	data []byte
 	ack  chan error
 }
 
-// NewWAL creates (or truncates) the WAL file for the given node ID and
-// starts the background writer goroutine.
-//
-// id is the node's listen address (e.g. ":3000"). The leading colon is
-// stripped to produce a valid filename: "3000.log".
-//
-// Returns an error if the file cannot be created.
+// NewWAL opens (or creates) the WAL file for node id (e.g. ":3000")
+// and starts the background writer goroutine.
 func NewWAL(id string) (*WAL, error) {
-	// Strip the leading ':' from the address to form a valid filename.
 	name := id[1:] + ".log"
 	f, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
@@ -104,43 +88,32 @@ func NewWAL(id string) (*WAL, error) {
 	}
 
 	w := &WAL{
-		f:        f,
-		ch:       make(chan walAppend, 64), // buffer absorbs bursts without blocking
-		done:     make(chan struct{}),
-		syncErrc: make(chan error, 1),
+		f:    f,
+		ch:   make(chan walAppend, 64),
+		done: make(chan struct{}),
 	}
-
 	go w.run()
 	return w, nil
 }
 
-// run is the sole goroutine that writes to and syncs the WAL file.
-//
-// Design rationale:
-//   - A single writer eliminates lock contention on the file descriptor.
-//   - Writes are acknowledged immediately after Write(); the caller
-//     unblocks as soon as the kernel has accepted the bytes.
-//   - Fsync is decoupled onto a ticker: a 10 ms window batches concurrent
-//     writes into one fsync call, significantly reducing I/O overhead
-//     under load while keeping the durability gap bounded.
+// run is the sole goroutine that writes to and syncs the file.
+// Writes are acknowledged after Write(); fsync is decoupled onto a
+// 10 ms ticker to batch concurrent writes into one syscall.
 func (w *WAL) run() {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	defer w.f.Sync() // final sync on shutdown
+	defer w.f.Sync()
 
 	for {
 		select {
 		case entry := <-w.ch:
 			_, err := w.f.Write(entry.data)
-			entry.ack <- err // unblock the caller immediately after write
+			entry.ack <- err
 
 		case <-ticker.C:
-			// Best-effort periodic sync. If this fails, the next write
-			// attempt will likely also fail, surfacing the error to callers.
 			w.f.Sync()
 
 		case <-w.done:
-			// Drain any remaining records before exiting.
 			for {
 				select {
 				case entry := <-w.ch:
@@ -154,17 +127,11 @@ func (w *WAL) run() {
 	}
 }
 
-// append serializes an Object into a WAL record and sends it to the
-// background writer. It blocks until the record has been written to
-// the OS page cache (not necessarily fsynced).
-//
-// Returns the assigned sequence number and any write error.
+// append serialises obj into a WAL record and blocks until the OS has
+// accepted the bytes. Returns the assigned LSN.
 func (w *WAL) append(op OpType, obj Object) (uint64, error) {
 	seq := w.seq.Add(1)
-
 	data, checksum := serializeRecord(seq, op, obj)
-
-	// Embed checksum into the already-allocated header.
 	binary.BigEndian.PutUint32(data[4:8], checksum)
 
 	ack := make(chan error, 1)
@@ -175,8 +142,7 @@ func (w *WAL) append(op OpType, obj Object) (uint64, error) {
 	return seq, nil
 }
 
-// Close signals the background writer to flush remaining records,
-// performs a final fsync, and closes the underlying file.
+// Close drains remaining records, fsyncs, and closes the file.
 func (w *WAL) Close() error {
 	close(w.done)
 	if err := w.f.Sync(); err != nil {
@@ -185,99 +151,96 @@ func (w *WAL) Close() error {
 	return w.f.Close()
 }
 
-// serializeRecord encodes a WAL record into a byte slice and returns
-// it along with the CRC32 checksum of the payload.
-//
-// Layout: [Length(4) | Checksum(4) | Sequence(8) | OpType(1) | KeyLen(4) | ValueLen(4) | Key | Value]
-//
-// The checksum field in the returned slice is left as zero; the caller
-// must write the returned checksum value into bytes [4:8] itself.
-// This avoids a second allocation for a two-pass encode.
+// serializeRecord encodes a WAL record. The checksum field is left
+// zeroed; the caller writes the returned checksum into bytes [4:8].
 func serializeRecord(seq uint64, op OpType, obj Object) ([]byte, uint32) {
+	forBytes := []byte(obj.Metadata.For)
+	forLen := len(forBytes)
 	keyLen := len(obj.Key)
 	valueLen := len(obj.Value)
-	totalLen := walHeaderSize + keyLen + valueLen
+	totalLen := walHeaderSize + forLen + keyLen + valueLen
 
 	buf := make([]byte, totalLen)
-	offset := 0
+	off := 0
 
-	// Length — total record size
-	binary.BigEndian.PutUint32(buf[offset:], uint32(totalLen))
-	offset += 4
+	binary.BigEndian.PutUint32(buf[off:], uint32(totalLen))
+	off += 4
+	off += 4 // checksum placeholder
 
-	// Checksum placeholder — filled in after payload is written
-	offset += 4
+	binary.BigEndian.PutUint64(buf[off:], seq)
+	off += 8
 
-	// Sequence (LSN)
-	binary.BigEndian.PutUint64(buf[offset:], seq)
-	offset += 8
+	ts := obj.Metadata.Timestamp.UTC().UnixNano()
+	binary.BigEndian.PutUint64(buf[off:], uint64(ts))
+	off += 8
 
-	// OpType
-	buf[offset] = byte(op)
-	offset++
+	buf[off] = byte(op)
+	off++
 
-	// KeyLen
-	binary.BigEndian.PutUint32(buf[offset:], uint32(keyLen))
-	offset += 4
+	binary.BigEndian.PutUint32(buf[off:], uint32(forLen))
+	off += 4
+	binary.BigEndian.PutUint32(buf[off:], uint32(keyLen))
+	off += 4
+	binary.BigEndian.PutUint32(buf[off:], uint32(valueLen))
+	off += 4
 
-	// ValueLen
-	binary.BigEndian.PutUint32(buf[offset:], uint32(valueLen))
-	offset += 4
+	copy(buf[off:], forBytes)
+	off += forLen
+	copy(buf[off:], obj.Key)
+	off += keyLen
+	copy(buf[off:], obj.Value)
 
-	// Payload: Key + Value
-	copy(buf[offset:], obj.Key)
-	offset += keyLen
-	copy(buf[offset:], obj.Value)
-
-	// CRC32 is computed over everything after the checksum field.
-	// This covers [Sequence..Value], i.e. buf[8:].
+	// Checksum covers everything after the checksum field itself.
 	checksum := crc32.ChecksumIEEE(buf[8:])
 	return buf, checksum
 }
 
 // DeserializeRecord parses a raw byte slice into a walRecord.
 // Used during crash recovery to replay the WAL.
-//
-// Returns an error if the buffer is too short or the checksum does not match.
 func DeserializeRecord(buf []byte) (*walRecord, error) {
 	if len(buf) < walHeaderSize {
 		return nil, fmt.Errorf("wal: record too short (%d bytes)", len(buf))
 	}
 
 	rec := &walRecord{}
-	offset := 0
+	off := 0
 
-	rec.Length = binary.BigEndian.Uint32(buf[offset:])
-	offset += 4
+	rec.Length = binary.BigEndian.Uint32(buf[off:])
+	off += 4
+	rec.Checksum = binary.BigEndian.Uint32(buf[off:])
+	off += 4
+	rec.Sequence = binary.BigEndian.Uint64(buf[off:])
+	off += 8
 
-	rec.Checksum = binary.BigEndian.Uint32(buf[offset:])
-	offset += 4
+	tsNano := int64(binary.BigEndian.Uint64(buf[off:]))
+	off += 8
+	rec.Timestamp = time.Unix(0, tsNano).UTC()
 
-	rec.Sequence = binary.BigEndian.Uint64(buf[offset:])
-	offset += 8
+	rec.OpType = OpType(buf[off])
+	off++
 
-	rec.OpType = OpType(buf[offset])
-	offset++
+	forLen := int(binary.BigEndian.Uint32(buf[off:]))
+	off += 4
+	keyLen := int(binary.BigEndian.Uint32(buf[off:]))
+	off += 4
+	valueLen := int(binary.BigEndian.Uint32(buf[off:]))
+	off += 4
 
-	rec.KeyLen = binary.BigEndian.Uint32(buf[offset:])
-	offset += 4
-
-	rec.ValueLen = binary.BigEndian.Uint32(buf[offset:])
-	offset += 4
-
-	expected := int(walHeaderSize) + int(rec.KeyLen) + int(rec.ValueLen)
+	expected := walHeaderSize + forLen + keyLen + valueLen
 	if len(buf) < expected {
 		return nil, fmt.Errorf("wal: truncated record (have %d, need %d)", len(buf), expected)
 	}
 
-	rec.Key = make([]byte, rec.KeyLen)
-	copy(rec.Key, buf[offset:offset+int(rec.KeyLen)])
-	offset += int(rec.KeyLen)
+	rec.For = string(buf[off : off+forLen])
+	off += forLen
 
-	rec.Value = make([]byte, rec.ValueLen)
-	copy(rec.Value, buf[offset:offset+int(rec.ValueLen)])
+	rec.Key = make([]byte, keyLen)
+	copy(rec.Key, buf[off:])
+	off += keyLen
 
-	// Verify checksum over buf[8:expected] (everything after the checksum field).
+	rec.Value = make([]byte, valueLen)
+	copy(rec.Value, buf[off:])
+
 	got := crc32.ChecksumIEEE(buf[8:expected])
 	if got != rec.Checksum {
 		return nil, fmt.Errorf("wal: checksum mismatch seq=%d (want %d, got %d)",

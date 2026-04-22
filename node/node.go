@@ -50,7 +50,7 @@ type Node struct {
 func New(ctx context.Context, cfg Config, t transport.Transport, log *slog.Logger) *Node {
 	cfg.defaults()
 	ctx, cancel := context.WithCancel(ctx)
-	
+
 	nodeId := cfg.ListenAddr
 	st, _ := store.New(nodeId)
 
@@ -270,8 +270,7 @@ func (n *Node) pingLoop() {
 		select {
 		case <-n.ctx.Done():
 			return
-		case <-tick.C:
-			n.log.Info("pinging peers", "count", n.registry.Len())
+		case <-tick.C:			
 			n.Broadcast(&message.Message{Type: message.Ping})
 		}
 	}

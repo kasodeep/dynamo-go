@@ -83,5 +83,8 @@
 | `chan T`                          | ❗ shared            |
 | `time.Time`                       | ✅ safe (value type) |
 
-→ Hinted handoff
-→ Rebalancing (last)
+-> Log (store)
+-> Compaction
+-> Handoff
+-> Rebalancing
+

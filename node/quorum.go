@@ -68,16 +68,14 @@ func (n *Node) onPutRequest(p peer.Peer, m *message.Message) error {
 		fmt.Errorf("timeout waiting for write quorum"),
 	)
 
-	// Register inflight BEFORE launching goroutine — avoids a race where
-	// a very fast local ack arrives before the entry exists in the map.
 	inf := n.coordinator.CreateAndAddRequest(reqID, W, N, cancel)
 
 	obj := store.Object{
 		Key:   req.Key,
 		Value: req.Value,
 		Metadata: store.Metadata{
-			Timestamp: time.Now(),
-		},
+			Timestamp: time.Now().UTC(),
+		}, // handled by write (store)
 	}
 
 	n.log.Info("put request received",
@@ -401,7 +399,7 @@ func (n *Node) onWriteRequest(p peer.Peer, m *message.Message) error {
 		return err
 	}
 
-	n.log.Debug("write request received",
+	n.log.Info("write request received",
 		"req_id", req.ID,
 		"key", string(req.Obj.Key),
 		"hinted_for", req.Obj.Metadata.For,
@@ -409,10 +407,16 @@ func (n *Node) onWriteRequest(p peer.Peer, m *message.Message) error {
 	)
 
 	// storing the object locally.
-	_, err = n.store.WriteObject(req.Obj)
+	lsn, err := n.store.WriteObject(req.Obj)
 	if err != nil {
 		return err
 	}
+
+	n.log.Info("object stored locally",
+		"req_id", req.ID,
+		"key", string(req.Obj.Key),
+		"lsn", lsn,
+	)
 
 	payload, _ := store.EncodeWriteAck(&store.WriteAck{
 		ID: req.ID,

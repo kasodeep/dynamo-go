@@ -72,7 +72,5 @@ func (n *Node) onPong(p peer.Peer, _ *message.Message) error {
 	}
 
 	n.table.MarkAlive(id)
-	n.log.Info("pong received", "from", id)
-
 	return nil
 }
