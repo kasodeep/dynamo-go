@@ -1,179 +1,184 @@
 #!/usr/bin/env bash
 
-# Strict mode:
-# -e  → exit on error
-# -u  → undefined vars are errors
-# -o pipefail → fail if any piped command fails
 set -euo pipefail
 
 # ---- CONFIG ----
 BASE_PORT=4001
 DEFAULT_NODES=3
-BIN="./bin/node"        # compiled binary (preferred)
+BIN="./bin/node"
 LOG_DIR="./logs"
+STATE_FILE="./cluster.state"
 
 mkdir -p "$LOG_DIR"
+touch "$STATE_FILE"
 
-# ---- UTIL: Kill process on a port (graceful → force) ----
-kill_port() {
-  local port=$1
-
-  # Get PIDs listening on this port
-  PIDS=$(lsof -ti tcp:$port || true)
-
-  if [ -n "$PIDS" ]; then
-    echo "🔻 Stopping port $port (PID: $PIDS)"
-
-    # Try graceful shutdown first
-    kill $PIDS || true
-    sleep 0.5
-
-    # Force kill if still alive
-    kill -9 $PIDS 2>/dev/null || true
-  fi
+# ---- UTIL: Read state ----
+get_nodes() {
+  cat "$STATE_FILE"
 }
 
-# ---- UTIL: Start a node ----
+# ---- UTIL: Add node to state ----
+add_node_state() {
+  echo "$1" >> "$STATE_FILE"
+}
+
+# ---- UTIL: Remove node from state ----
+remove_node_state() {
+  grep -v "^$1$" "$STATE_FILE" > "$STATE_FILE.tmp" || true
+  mv "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
+# ---- UTIL: Clear state ----
+clear_state() {
+  : > "$STATE_FILE"
+}
+
+# ---- UTIL: Build bootstrap list ----
+build_bootstrap() {
+  local current_port=$1
+  local peers=()
+
+  while read -r port; do
+    if [ -n "$port" ] && [ "$port" != "$current_port" ]; then
+      peers+=(":$port")
+    fi
+  done < "$STATE_FILE"
+
+  (IFS=,; echo "${peers[*]}")
+}
+
+# ---- UTIL: Start node ----
 start_node() {
   local port=$1
   local bootstrap=$2
+
   local logfile="$LOG_DIR/node$port.log"
   local pidfile="$LOG_DIR/node$port.pid"
 
   echo "🚀 Starting node :$port"
-
-  # Ensure log file exists
   : > "$logfile"
 
-  # Choose execution mode:
   if [ -f "$BIN" ]; then
     CMD="$BIN -addr=:$port"
-    if [ -n "$bootstrap" ]; then
-      CMD="$CMD -bootstrap=$bootstrap"
-    fi
   else
-    # fallback to go run
     CMD="go run ./cmd/node -addr=:$port"
-    if [ -n "$bootstrap" ]; then
-      CMD="$CMD -bootstrap=$bootstrap"
-    fi
   fi
 
-  # Run in background with logging
+  if [ -n "$bootstrap" ]; then
+    CMD="$CMD -bootstrap=$bootstrap"
+  fi
+
+  echo "   ↳ bootstrap: ${bootstrap:-<none>}"
+
   eval "$CMD" >> "$logfile" 2>&1 &
 
   pid=$!
   echo $pid > "$pidfile"
 
-  # Give process time to start
   sleep 0.5
 
-  # Detect crash immediately
   if ! kill -0 $pid 2>/dev/null; then
     echo "❌ Node :$port crashed!"
-    echo "---- LOG ($logfile) ----"
     cat "$logfile"
     exit 1
   fi
 
+  # Only add to state AFTER successful start
+  add_node_state "$port"
+
   echo "✅ Node :$port started (PID $pid)"
+}
+
+# ---- UTIL: Stop node ----
+stop_node() {
+  local port=$1
+  local pidfile="$LOG_DIR/node$port.pid"
+
+  if [ -f "$pidfile" ]; then
+    pid=$(cat "$pidfile")
+    echo "🔻 Stopping node :$port (PID $pid)"
+
+    kill "$pid" 2>/dev/null || true
+    sleep 0.5
+    kill -9 "$pid" 2>/dev/null || true
+
+    rm -f "$pidfile"
+  fi
+
+  remove_node_state "$port"
 }
 
 # ---- COMMAND HANDLER ----
 case "${1:-start}" in
 
-# ---- START DEFAULT CLUSTER ----
 start)
   echo "Starting $DEFAULT_NODES nodes..."
 
-  # Cleanup old processes
-  for ((i=0; i<DEFAULT_NODES; i++)); do
-    port=$((BASE_PORT + i))
-    kill_port $port
-  done
+  clear_state
 
-  # Start seed node (no bootstrap)
+  # Start seed node
   start_node 4001 ""
 
-  sleep 1
-
-  # Start remaining nodes
+  # Start rest deterministically
   for ((i=1; i<DEFAULT_NODES; i++)); do
     port=$((BASE_PORT + i))
-    start_node $port ":4001"
-    sleep 0.5
+    bootstrap=$(build_bootstrap "$port")
+    start_node "$port" "$bootstrap"
   done
 
   echo ""
   echo "📡 Cluster started"
-  echo "Logs: $LOG_DIR/node*.log"
   ;;
 
-# ---- ADD NODE ----
 add)
   port=${2:-}
-
   if [ -z "$port" ]; then
     echo "Usage: ./cluster.sh add 4004"
     exit 1
   fi
 
-  kill_port $port
-  start_node $port ":4001"
+  bootstrap=$(build_bootstrap "$port")
+  start_node "$port" "$bootstrap"
   ;;
 
-# ---- REMOVE NODE ----
 remove)
   port=${2:-}
-
   if [ -z "$port" ]; then
     echo "Usage: ./cluster.sh remove 4002"
     exit 1
   fi
 
-  kill_port $port
-
-  # Remove PID + log (optional)
-  rm -f "$LOG_DIR/node$port.pid"
-
+  stop_node "$port"
   echo "🗑️ Removed node :$port"
   ;;
 
-# ---- STOP ALL ----
 stop)
   echo "Stopping all nodes..."
 
-  for port in {4001..4010}; do
-    kill_port $port
-  done
+  while read -r port; do
+    [ -n "$port" ] && stop_node "$port"
+  done < "$STATE_FILE"
 
+  clear_state
   echo "🛑 All nodes stopped"
   ;;
 
-# ---- VIEW LOGS ----
 logs)
-  echo "📜 Tailing logs..."
   tail -f $LOG_DIR/node*.log
   ;;
 
-# ---- STATUS ----
 status)
-  echo "Node status:"
-  for port in {4001..4010}; do
-    if lsof -i :$port >/dev/null 2>&1; then
-      echo "✅ :$port running"
-    fi
-  done
+  echo "Tracked nodes:"
+  get_nodes | sed 's/^/✅ :/'
   ;;
 
-# ---- HELP ----
 *)
   echo "Usage:"
-  echo "  ./cluster.sh start        # start default cluster (3 nodes)"
-  echo "  ./cluster.sh add 4004     # add node"
-  echo "  ./cluster.sh remove 4002  # remove node"
-  echo "  ./cluster.sh stop         # stop all nodes"
-  echo "  ./cluster.sh logs         # tail logs"
-  echo "  ./cluster.sh status       # show running nodes"
+  echo "  ./cluster.sh start"
+  echo "  ./cluster.sh add 4004"
+  echo "  ./cluster.sh remove 4002"
+  echo "  ./cluster.sh stop"
+  echo "  ./cluster.sh logs"
+  echo "  ./cluster.sh status"
   ;;
 esac
