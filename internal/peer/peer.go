@@ -16,7 +16,7 @@
 //   - Close must be idempotent and safe under concurrent access.
 package peer
 
-import "github.com/kasodeep/dynamo-go/message"
+import "github.com/kasodeep/dynamo-go/internal/message"
 
 // Peer represents a live connection to a remote node.
 //

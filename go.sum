@@ -2,3 +2,5 @@ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/gorilla/mux v1.8.1 h1:TuBL49tXwgrFYWhqrNgrUNEY92u81SPhu7sTdzQEiWY=
 github.com/gorilla/mux v1.8.1/go.mod h1:AKf9I4AEqPTmMytcMc0KkNouC66V3BtZ4qD5fmWSiMQ=
+github.com/kasodeep/dynamo-go v0.0.0-20260502045849-d191e1d92b53 h1:KlW4okOlYdo4/PhfIbuzz92AAKuZXI/2nm7U8dH7j48=
+github.com/kasodeep/dynamo-go v0.0.0-20260502045849-d191e1d92b53/go.mod h1:vYHjIZj+h7f+O8h49x8lfl3+DbngM2s54vTfG/89vo8=

@@ -5,9 +5,9 @@ import (
 	"net"
 	"time"
 
-	"github.com/kasodeep/dynamo-go/codec"
-	"github.com/kasodeep/dynamo-go/message"
-	"github.com/kasodeep/dynamo-go/store"
+	"github.com/kasodeep/dynamo-go/internal/codec"
+	"github.com/kasodeep/dynamo-go/internal/message"
+	"github.com/kasodeep/dynamo-go/internal/store"
 )
 
 func main() {

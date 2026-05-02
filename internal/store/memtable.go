@@ -3,7 +3,7 @@ package store
 import (
 	"time"
 
-	"github.com/kasodeep/dynamo-go/treemap"
+	"github.com/kasodeep/dynamo-go/internal/treemap"
 )
 
 // DefaultFlushThreshold is the size in bytes at which the MemTable should

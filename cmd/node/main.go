@@ -9,8 +9,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/kasodeep/dynamo-go/node"
-	"github.com/kasodeep/dynamo-go/tcp"
+	"github.com/kasodeep/dynamo-go/internal/node"
+	"github.com/kasodeep/dynamo-go/internal/tcp"
 )
 
 func main() {

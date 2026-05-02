@@ -3,9 +3,9 @@ package node
 import (
 	"fmt"
 
-	"github.com/kasodeep/dynamo-go/member"
-	"github.com/kasodeep/dynamo-go/message"
-	"github.com/kasodeep/dynamo-go/peer"
+	"github.com/kasodeep/dynamo-go/internal/member"
+	"github.com/kasodeep/dynamo-go/internal/message"
+	"github.com/kasodeep/dynamo-go/internal/peer"
 )
 
 // Handles the handshake protocol, and invoked when we receive Handshake (0x01) msg.

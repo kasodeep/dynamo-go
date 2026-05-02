@@ -7,7 +7,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
-	"github.com/kasodeep/dynamo-go/store"
+	"github.com/kasodeep/dynamo-go/internal/store"
 )
 
 func Get(w http.ResponseWriter, req *http.Request) {

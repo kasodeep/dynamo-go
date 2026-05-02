@@ -3,8 +3,8 @@ package router
 import (
 	"fmt"
 
-	"github.com/kasodeep/dynamo-go/message"
-	"github.com/kasodeep/dynamo-go/peer"
+	"github.com/kasodeep/dynamo-go/internal/message"
+	"github.com/kasodeep/dynamo-go/internal/peer"
 )
 
 // HandlerFunc defines the function signature for processing incoming messages from a peer.

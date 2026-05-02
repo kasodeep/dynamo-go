@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/kasodeep/dynamo-go/member"
-	"github.com/kasodeep/dynamo-go/message"
-	"github.com/kasodeep/dynamo-go/peer"
-	"github.com/kasodeep/dynamo-go/registry"
-	"github.com/kasodeep/dynamo-go/store"
+	"github.com/kasodeep/dynamo-go/internal/member"
+	"github.com/kasodeep/dynamo-go/internal/message"
+	"github.com/kasodeep/dynamo-go/internal/peer"
+	"github.com/kasodeep/dynamo-go/internal/registry"
+	"github.com/kasodeep/dynamo-go/internal/store"
 )
 
 // Quorum parameters — global for now, can be per-keyspace in future.

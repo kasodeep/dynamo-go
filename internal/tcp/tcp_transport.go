@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/kasodeep/dynamo-go/peer"
+	"github.com/kasodeep/dynamo-go/internal/peer"
 )
 
 // Transport implements the Transport interface over TCP, with optional TLS support,

@@ -8,13 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kasodeep/dynamo-go/member"
-	"github.com/kasodeep/dynamo-go/message"
-	"github.com/kasodeep/dynamo-go/peer"
-	"github.com/kasodeep/dynamo-go/registry"
-	"github.com/kasodeep/dynamo-go/router"
-	"github.com/kasodeep/dynamo-go/store"
-	"github.com/kasodeep/dynamo-go/transport"
+	"github.com/kasodeep/dynamo-go/internal/member"
+	"github.com/kasodeep/dynamo-go/internal/message"
+	"github.com/kasodeep/dynamo-go/internal/peer"
+	"github.com/kasodeep/dynamo-go/internal/registry"
+	"github.com/kasodeep/dynamo-go/internal/router"
+	"github.com/kasodeep/dynamo-go/internal/store"
+	"github.com/kasodeep/dynamo-go/internal/transport"
 )
 
 // Node is the remote node or a server acting as a part of cluster.
@@ -270,7 +270,7 @@ func (n *Node) pingLoop() {
 		select {
 		case <-n.ctx.Done():
 			return
-		case <-tick.C:			
+		case <-tick.C:
 			n.Broadcast(&message.Message{Type: message.Ping})
 		}
 	}

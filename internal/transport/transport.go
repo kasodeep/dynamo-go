@@ -21,7 +21,7 @@
 //   - Close must be safe and terminate all blocking operations.
 package transport
 
-import "github.com/kasodeep/dynamo-go/peer"
+import "github.com/kasodeep/dynamo-go/internal/peer"
 
 // Transport abstracts connection lifecycle management for node-to-node communication.
 //

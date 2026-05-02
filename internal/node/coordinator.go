@@ -5,7 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/kasodeep/dynamo-go/store"
+	"github.com/kasodeep/dynamo-go/internal/store"
 )
 
 // inflight tracks the quorum state for a single in-progress request (read or write).

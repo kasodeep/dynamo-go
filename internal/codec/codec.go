@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/kasodeep/dynamo-go/message"
+	"github.com/kasodeep/dynamo-go/internal/message"
 )
 
 const maxPayload = 32 << 20 // 32 MiB hard cap

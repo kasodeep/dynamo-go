@@ -3,8 +3,8 @@ package node
 import (
 	"fmt"
 
-	"github.com/kasodeep/dynamo-go/message"
-	"github.com/kasodeep/dynamo-go/peer"
+	"github.com/kasodeep/dynamo-go/internal/message"
+	"github.com/kasodeep/dynamo-go/internal/peer"
 )
 
 // Broadcast sends a message to all registered peers.

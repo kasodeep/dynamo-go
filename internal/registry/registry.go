@@ -40,8 +40,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kasodeep/dynamo-go/peer"
-	"github.com/kasodeep/dynamo-go/treemap"
+	"github.com/kasodeep/dynamo-go/internal/peer"
+	"github.com/kasodeep/dynamo-go/internal/treemap"
 )
 
 // V is the number of virtual nodes per physical peer.

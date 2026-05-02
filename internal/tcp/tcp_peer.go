@@ -12,8 +12,8 @@ import (
 	"net"
 	"sync"
 
-	"github.com/kasodeep/dynamo-go/codec"
-	"github.com/kasodeep/dynamo-go/message"
+	"github.com/kasodeep/dynamo-go/internal/codec"
+	"github.com/kasodeep/dynamo-go/internal/message"
 )
 
 // Peer represents a single TCP connection to a remote node.
